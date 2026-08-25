@@ -1,0 +1,75 @@
+services:
+  db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-alfateks}
+      POSTGRES_USER: ${POSTGRES_USER:-alfateks}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  api:
+    build: .
+    environment:
+      ENVIRONMENT: ${ENVIRONMENT:-development}
+      DEBUG: ${DEBUG:-false}
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-alfateks}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-alfateks}
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:?Set JWT_SECRET_KEY in .env}
+      JWT_EXPIRE_MINUTES: ${JWT_EXPIRE_MINUTES:-60}
+      JWT_ISSUER: ${JWT_ISSUER:-alfateks-api}
+      JWT_AUDIENCE: ${JWT_AUDIENCE:-alfateks-clients}
+      ACTIVITY_UPDATE_MINUTES: ${ACTIVITY_UPDATE_MINUTES:-5}
+      LOGIN_RATE_LIMIT_ATTEMPTS: ${LOGIN_RATE_LIMIT_ATTEMPTS:-5}
+      LOGIN_RATE_LIMIT_MINUTES: ${LOGIN_RATE_LIMIT_MINUTES:-15}
+      AUDIT_MAX_PAGE_SIZE: ${AUDIT_MAX_PAGE_SIZE:-100}
+      AUDIT_MAX_RANGE_DAYS: ${AUDIT_MAX_RANGE_DAYS:-366}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3000,http://localhost:5173}
+      ALLOW_NEGATIVE_STOCK: ${ALLOW_NEGATIVE_STOCK:-false}
+      MEDIA_ROOT: ${MEDIA_ROOT:-/app/media}
+      MAX_PRODUCT_IMAGE_BYTES: ${MAX_PRODUCT_IMAGE_BYTES:-5242880}
+      MAX_PRODUCT_IMAGE_PIXELS: ${MAX_PRODUCT_IMAGE_PIXELS:-24000000}
+      PRODUCT_IMAGE_MAX_DIMENSION: ${PRODUCT_IMAGE_MAX_DIMENSION:-2000}
+      OCR_LANGUAGES: ${OCR_LANGUAGES:-eng+tur+rus+uzb}
+      OCR_TIMEOUT_SECONDS: ${OCR_TIMEOUT_SECONDS:-20}
+      REPORT_TIMEZONE: ${REPORT_TIMEZONE:-Europe/Istanbul}
+      REPORT_MAX_EXPORT_ROWS: ${REPORT_MAX_EXPORT_ROWS:-5000}
+      REPORT_PNG_MAX_ROWS: ${REPORT_PNG_MAX_ROWS:-200}
+    ports:
+      - "8000:8000"
+    volumes:
+      - media_data:/app/media
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  seed:
+    build: .
+    profiles: ["tools"]
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-alfateks}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-alfateks}
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY}
+      SEED_ADMIN_USERNAME: ${SEED_ADMIN_USERNAME:-admin}
+      SEED_ADMIN_EMAIL: ${SEED_ADMIN_EMAIL:-admin@example.com}
+      SEED_ADMIN_FULL_NAME: ${SEED_ADMIN_FULL_NAME:-Warehouse Administrator}
+      SEED_ADMIN_PASSWORD: ${SEED_ADMIN_PASSWORD:-replace-with-a-strong-admin-password}
+    depends_on:
+      db:
+        condition: service_healthy
+    command: ["sh", "-c", "alembic upgrade head && python -m app.seed"]
+    restart: "no"
+
+volumes:
+  postgres_data:
+  media_data:

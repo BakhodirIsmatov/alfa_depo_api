@@ -1,0 +1,514 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
+from datetime import datetime
+from decimal import Decimal
+from html import escape
+from io import BytesIO
+from pathlib import Path
+from typing import Any
+
+import reportlab
+from openpyxl import Workbook
+from openpyxl.styles import Alignment, Font, PatternFill
+from openpyxl.utils import get_column_letter
+from PIL import Image, ImageDraw, ImageFont
+from reportlab.lib import colors
+from reportlab.lib.enums import TA_CENTER
+from reportlab.lib.pagesizes import A4, landscape
+from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
+from reportlab.lib.units import mm
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.ttfonts import TTFont
+from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
+
+from app.schemas.report import (
+    DailyStockReportResponse,
+    ProductReportFilters,
+    ProductReportItem,
+    ProductReportSummary,
+    ReportFormat,
+    ReportLanguage,
+)
+
+
+@dataclass(frozen=True)
+class ExportColumn:
+    key: str
+    title: str
+    width: int
+
+
+@dataclass(frozen=True)
+class ReportDocument:
+    title: str
+    subtitle: str
+    columns: list[ExportColumn]
+    rows: list[dict[str, Any]]
+    summary: list[tuple[str, Any]]
+    filename: str
+
+
+@dataclass(frozen=True)
+class ExportArtifact:
+    content: bytes
+    media_type: str
+    filename: str
+
+
+TRANSLATIONS = {
+    ReportLanguage.TURKISH: {
+        "product_report": "Ürün Raporu",
+        "daily_report": "Günlük Stok Hareket Raporu",
+        "generated": "Oluşturulma",
+        "code": "Ürün Kodu",
+        "name": "Ürün Adı",
+        "brand": "Marka",
+        "color": "Renk",
+        "lot": "Lot",
+        "current": "Mevcut (kg)",
+        "minimum": "Minimum (kg)",
+        "status": "Durum",
+        "created": "Oluşturuldu",
+        "total_products": "Toplam ürün",
+        "total_stock": "Toplam stok (kg)",
+        "total_minimum": "Toplam minimum (kg)",
+        "low": "Düşük stok",
+        "out": "Stokta yok",
+        "date": "Tarih",
+        "opening": "Başlangıç (kg)",
+        "closing": "Kapanış (kg)",
+        "stock_in": "Giriş (kg)",
+        "stock_out": "Çıkış (kg)",
+        "adjustment_in": "Pozitif düzeltme",
+        "adjustment_out": "Negatif düzeltme",
+        "net": "Net değişim",
+        "transactions": "İşlem",
+        "affected": "Etkilenen ürün",
+        "normal": "Normal",
+    },
+    ReportLanguage.ENGLISH: {
+        "product_report": "Product Report",
+        "daily_report": "Daily Stock Movement Report",
+        "generated": "Generated",
+        "code": "Product Code",
+        "name": "Product Name",
+        "brand": "Brand",
+        "color": "Color",
+        "lot": "Lot",
+        "current": "Current (kg)",
+        "minimum": "Minimum (kg)",
+        "status": "Status",
+        "created": "Created",
+        "total_products": "Total products",
+        "total_stock": "Total stock (kg)",
+        "total_minimum": "Total minimum (kg)",
+        "low": "Low stock",
+        "out": "Out of stock",
+        "date": "Date",
+        "opening": "Opening (kg)",
+        "closing": "Closing (kg)",
+        "stock_in": "Stock in (kg)",
+        "stock_out": "Stock out (kg)",
+        "adjustment_in": "Positive adjustment",
+        "adjustment_out": "Negative adjustment",
+        "net": "Net change",
+        "transactions": "Transactions",
+        "affected": "Affected products",
+        "normal": "Normal",
+    },
+    ReportLanguage.UZBEK: {
+        "product_report": "Mahsulotlar hisoboti",
+        "daily_report": "Kunlik ombor harakatlari hisoboti",
+        "generated": "Yaratilgan vaqt",
+        "code": "Mahsulot kodi",
+        "name": "Mahsulot nomi",
+        "brand": "Marka",
+        "color": "Rang",
+        "lot": "Lot",
+        "current": "Mavjud (kg)",
+        "minimum": "Minimum (kg)",
+        "status": "Holat",
+        "created": "Yaratilgan",
+        "total_products": "Jami mahsulot",
+        "total_stock": "Jami stok (kg)",
+        "total_minimum": "Jami minimum (kg)",
+        "low": "Kam qolgan",
+        "out": "Tugagan",
+        "date": "Sana",
+        "opening": "Boshlang‘ich (kg)",
+        "closing": "Yakuniy (kg)",
+        "stock_in": "Kirim (kg)",
+        "stock_out": "Chiqim (kg)",
+        "adjustment_in": "Musbat tuzatish",
+        "adjustment_out": "Manfiy tuzatish",
+        "net": "Sof o‘zgarish",
+        "transactions": "Operatsiyalar",
+        "affected": "Ta’sirlangan mahsulot",
+        "normal": "Normal",
+    },
+}
+
+
+def _decimal(value: Decimal | int | str) -> str:
+    result = f"{Decimal(value):,.3f}"
+    return result.rstrip("0").rstrip(".")
+
+
+def _status(value: str, labels: dict[str, str]) -> str:
+    return labels.get(value, value)
+
+
+def product_report_document(
+    items: list[ProductReportItem],
+    summary: ProductReportSummary,
+    filters: ProductReportFilters,
+    language: ReportLanguage,
+    generated_at: datetime,
+) -> ReportDocument:
+    labels = TRANSLATIONS[language]
+    filter_parts = [
+        value
+        for value in (
+            filters.search and f"search={filters.search}",
+            filters.brand and f"brand={filters.brand}",
+            filters.color and f"color={filters.color}",
+            filters.lot_number and f"lot={filters.lot_number}",
+            filters.stock_status.value != "all" and f"status={filters.stock_status.value}",
+            filters.created_from and f"from={filters.created_from.isoformat()}",
+            filters.created_to and f"to={filters.created_to.isoformat()}",
+        )
+        if value
+    ]
+    subtitle = f"{labels['generated']}: {generated_at:%Y-%m-%d %H:%M}"
+    if filter_parts:
+        subtitle += " | " + ", ".join(filter_parts)
+    rows = [
+        {
+            "code": item.product_code,
+            "name": item.name,
+            "brand": item.brand,
+            "color": item.color,
+            "lot": item.lot_number,
+            "current": _decimal(item.current_stock),
+            "minimum": _decimal(item.minimum_stock),
+            "status": _status(item.stock_status, labels),
+            "created": item.created_at.strftime("%Y-%m-%d"),
+        }
+        for item in items
+    ]
+    return ReportDocument(
+        title=f"ALFATEKS — {labels['product_report']}",
+        subtitle=subtitle,
+        columns=[
+            ExportColumn("code", labels["code"], 15),
+            ExportColumn("name", labels["name"], 28),
+            ExportColumn("brand", labels["brand"], 18),
+            ExportColumn("color", labels["color"], 14),
+            ExportColumn("lot", labels["lot"], 18),
+            ExportColumn("current", labels["current"], 14),
+            ExportColumn("minimum", labels["minimum"], 14),
+            ExportColumn("status", labels["status"], 14),
+            ExportColumn("created", labels["created"], 14),
+        ],
+        rows=rows,
+        summary=[
+            (labels["total_products"], summary.total_products),
+            (labels["total_stock"], _decimal(summary.total_current_stock)),
+            (labels["total_minimum"], _decimal(summary.total_minimum_stock)),
+            (labels["low"], summary.low_stock_products),
+            (labels["out"], summary.out_of_stock_products),
+        ],
+        filename=f"alfateks-products-{generated_at:%Y%m%d-%H%M}",
+    )
+
+
+def daily_report_document(
+    report: DailyStockReportResponse, language: ReportLanguage
+) -> ReportDocument:
+    labels = TRANSLATIONS[language]
+    rows = [
+        {
+            "code": item.product_code,
+            "name": item.product_name,
+            "opening": _decimal(item.opening_stock),
+            "stock_in": _decimal(item.stock_in),
+            "stock_out": _decimal(item.stock_out),
+            "adjustment_in": _decimal(item.adjustment_in),
+            "adjustment_out": _decimal(item.adjustment_out),
+            "closing": _decimal(item.closing_stock),
+            "net": _decimal(item.net_change),
+            "transactions": item.transaction_count,
+        }
+        for item in report.products
+    ]
+    return ReportDocument(
+        title=f"ALFATEKS — {labels['daily_report']}",
+        subtitle=(
+            f"{labels['date']}: {report.report_date.isoformat()} | "
+            f"{labels['generated']}: {report.generated_at:%Y-%m-%d %H:%M} | "
+            f"TZ: {report.timezone}"
+        ),
+        columns=[
+            ExportColumn("code", labels["code"], 15),
+            ExportColumn("name", labels["name"], 25),
+            ExportColumn("opening", labels["opening"], 14),
+            ExportColumn("stock_in", labels["stock_in"], 14),
+            ExportColumn("stock_out", labels["stock_out"], 14),
+            ExportColumn("adjustment_in", labels["adjustment_in"], 16),
+            ExportColumn("adjustment_out", labels["adjustment_out"], 16),
+            ExportColumn("closing", labels["closing"], 14),
+            ExportColumn("net", labels["net"], 14),
+            ExportColumn("transactions", labels["transactions"], 12),
+        ],
+        rows=rows,
+        summary=[
+            (labels["stock_in"], _decimal(report.summary.stock_in)),
+            (labels["stock_out"], _decimal(report.summary.stock_out)),
+            (labels["adjustment_in"], _decimal(report.summary.adjustment_in)),
+            (labels["adjustment_out"], _decimal(report.summary.adjustment_out)),
+            (labels["net"], _decimal(report.summary.net_change)),
+            (labels["transactions"], report.summary.transaction_count),
+            (labels["affected"], report.summary.affected_products),
+        ],
+        filename=f"alfateks-daily-stock-{report.report_date:%Y%m%d}",
+    )
+
+
+def export_document(document: ReportDocument, report_format: ReportFormat) -> ExportArtifact:
+    normalized = report_format.normalized
+    if normalized == ReportFormat.PDF:
+        return ExportArtifact(_pdf(document), "application/pdf", f"{document.filename}.pdf")
+    if normalized == ReportFormat.PNG:
+        return ExportArtifact(_png(document), "image/png", f"{document.filename}.png")
+    return ExportArtifact(
+        _xlsx(document),
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        f"{document.filename}.xlsx",
+    )
+
+
+def _register_pdf_fonts() -> tuple[str, str]:
+    regular_name = "AlfateksVera"
+    bold_name = "AlfateksVeraBold"
+    if regular_name not in pdfmetrics.getRegisteredFontNames():
+        fonts = Path(reportlab.__file__).resolve().parent / "fonts"
+        pdfmetrics.registerFont(TTFont(regular_name, str(fonts / "Vera.ttf")))
+        pdfmetrics.registerFont(TTFont(bold_name, str(fonts / "VeraBd.ttf")))
+    return regular_name, bold_name
+
+
+def _pdf(document: ReportDocument) -> bytes:
+    regular, bold = _register_pdf_fonts()
+    output = BytesIO()
+    pdf = SimpleDocTemplate(
+        output,
+        pagesize=landscape(A4),
+        rightMargin=10 * mm,
+        leftMargin=10 * mm,
+        topMargin=12 * mm,
+        bottomMargin=12 * mm,
+        title=document.title,
+        author="Alfateks Warehouse",
+    )
+    styles = getSampleStyleSheet()
+    title_style = ParagraphStyle(
+        "ReportTitle",
+        parent=styles["Title"],
+        fontName=bold,
+        fontSize=17,
+        textColor=colors.HexColor("#16332A"),
+        alignment=TA_CENTER,
+    )
+    body_style = ParagraphStyle(
+        "ReportBody",
+        parent=styles["BodyText"],
+        fontName=regular,
+        fontSize=7.3,
+        leading=9,
+    )
+    header_style = ParagraphStyle(
+        "ReportHeader",
+        parent=body_style,
+        fontName=bold,
+        textColor=colors.white,
+    )
+    story = [
+        Paragraph(escape(document.title), title_style),
+        Paragraph(escape(document.subtitle), body_style),
+        Spacer(1, 5 * mm),
+        Paragraph(
+            " &nbsp; | &nbsp; ".join(
+                f"<b>{escape(str(label))}:</b> {escape(str(value))}"
+                for label, value in document.summary
+            ),
+            body_style,
+        ),
+        Spacer(1, 4 * mm),
+    ]
+    table_rows = [[Paragraph(escape(column.title), header_style) for column in document.columns]]
+    for row in document.rows:
+        table_rows.append(
+            [
+                Paragraph(escape(str(row.get(column.key, ""))), body_style)
+                for column in document.columns
+            ]
+        )
+    available_width = landscape(A4)[0] - 20 * mm
+    width_total = sum(column.width for column in document.columns)
+    column_widths = [available_width * column.width / width_total for column in document.columns]
+    table = Table(table_rows, colWidths=column_widths, repeatRows=1, hAlign="LEFT")
+    table.setStyle(
+        TableStyle(
+            [
+                ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#176B54")),
+                ("FONTNAME", (0, 0), (-1, 0), bold),
+                ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                ("GRID", (0, 0), (-1, -1), 0.25, colors.HexColor("#CBD5E1")),
+                ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#F8FAFC")]),
+                ("LEFTPADDING", (0, 0), (-1, -1), 4),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 4),
+                ("TOPPADDING", (0, 0), (-1, -1), 4),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+            ]
+        )
+    )
+    story.append(table)
+
+    def page_number(canvas, doc) -> None:
+        canvas.saveState()
+        canvas.setFont(regular, 7)
+        canvas.drawRightString(landscape(A4)[0] - 10 * mm, 6 * mm, f"{doc.page}")
+        canvas.restoreState()
+
+    pdf.build(story, onFirstPage=page_number, onLaterPages=page_number)
+    return output.getvalue()
+
+
+def _excel_safe(value: Any) -> Any:
+    if isinstance(value, str) and value.startswith(("=", "+", "-", "@")):
+        return f"'{value}"
+    return value
+
+
+def _xlsx(document: ReportDocument) -> bytes:
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "Alfateks Report"
+    last_column = get_column_letter(len(document.columns))
+    sheet.merge_cells(f"A1:{last_column}1")
+    sheet["A1"] = document.title
+    sheet["A1"].font = Font(size=16, bold=True, color="176B54")
+    sheet["A1"].alignment = Alignment(horizontal="center")
+    sheet.merge_cells(f"A2:{last_column}2")
+    sheet["A2"] = document.subtitle
+    sheet["A2"].alignment = Alignment(horizontal="center")
+    sheet.merge_cells(f"A4:{last_column}4")
+    sheet["A4"] = " | ".join(f"{label}: {value}" for label, value in document.summary)
+    sheet["A4"].font = Font(bold=True, color="334155")
+
+    header_row = 6
+    for index, column in enumerate(document.columns, start=1):
+        cell = sheet.cell(header_row, index, column.title)
+        cell.font = Font(bold=True, color="FFFFFF")
+        cell.fill = PatternFill("solid", fgColor="176B54")
+        cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+        sheet.column_dimensions[get_column_letter(index)].width = column.width
+    for row_index, row in enumerate(document.rows, start=header_row + 1):
+        for column_index, column in enumerate(document.columns, start=1):
+            cell = sheet.cell(row_index, column_index, _excel_safe(row.get(column.key, "")))
+            cell.alignment = Alignment(vertical="top", wrap_text=True)
+            if row_index % 2 == 0:
+                cell.fill = PatternFill("solid", fgColor="F8FAFC")
+    last_row = max(header_row, header_row + len(document.rows))
+    sheet.auto_filter.ref = f"A{header_row}:{last_column}{last_row}"
+    sheet.freeze_panes = f"A{header_row + 1}"
+    sheet.sheet_properties.pageSetUpPr.fitToPage = True
+    sheet.page_setup.orientation = "landscape"
+    sheet.page_setup.fitToWidth = 1
+    sheet.print_title_rows = f"{header_row}:{header_row}"
+    output = BytesIO()
+    workbook.save(output)
+    return output.getvalue()
+
+
+def _load_png_font(size: int, *, bold: bool = False):
+    candidates = (
+        (
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
+            if bold
+            else "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
+        ),
+        (
+            "/usr/share/fonts/dejavu/DejaVuSans-Bold.ttf"
+            if bold
+            else "/usr/share/fonts/dejavu/DejaVuSans.ttf"
+        ),
+        "DejaVuSans-Bold.ttf" if bold else "DejaVuSans.ttf",
+    )
+    for candidate in candidates:
+        try:
+            return ImageFont.truetype(candidate, size)
+        except OSError:
+            continue
+    return ImageFont.load_default()
+
+
+def _truncate(value: Any, width: int) -> str:
+    text = str(value)
+    maximum = max(6, int(width * 1.25))
+    return text if len(text) <= maximum else f"{text[: maximum - 1]}…"
+
+
+def _png(document: ReportDocument) -> bytes:
+    canvas_width = 1800
+    title_height = 150
+    summary_height = 62
+    header_height = 48
+    row_height = 42
+    canvas_height = (
+        title_height + summary_height + header_height + max(1, len(document.rows)) * row_height + 36
+    )
+    image = Image.new("RGB", (canvas_width, canvas_height), "white")
+    draw = ImageDraw.Draw(image)
+    title_font = _load_png_font(30, bold=True)
+    subtitle_font = _load_png_font(17)
+    header_font = _load_png_font(16, bold=True)
+    body_font = _load_png_font(15)
+    draw.rectangle((0, 0, canvas_width, title_height), fill="#16332A")
+    draw.text((42, 32), document.title, font=title_font, fill="white")
+    draw.text((42, 88), document.subtitle, font=subtitle_font, fill="#D8E7E2")
+    summary = "  |  ".join(f"{label}: {value}" for label, value in document.summary)
+    draw.text((42, title_height + 20), summary, font=header_font, fill="#334155")
+
+    table_top = title_height + summary_height
+    width_total = sum(column.width for column in document.columns)
+    widths = [int((canvas_width - 84) * column.width / width_total) for column in document.columns]
+    widths[-1] += canvas_width - 84 - sum(widths)
+    draw.rectangle((42, table_top, canvas_width - 42, table_top + header_height), fill="#176B54")
+    x = 42
+    for column, width in zip(document.columns, widths, strict=True):
+        draw.text(
+            (x + 8, table_top + 14),
+            _truncate(column.title, column.width),
+            font=header_font,
+            fill="white",
+        )
+        x += width
+    for row_index, row in enumerate(document.rows):
+        y = table_top + header_height + row_index * row_height
+        if row_index % 2:
+            draw.rectangle((42, y, canvas_width - 42, y + row_height), fill="#F1F5F9")
+        x = 42
+        for column, width in zip(document.columns, widths, strict=True):
+            draw.text(
+                (x + 8, y + 12),
+                _truncate(row.get(column.key, ""), column.width),
+                font=body_font,
+                fill="#172033",
+            )
+            x += width
+        draw.line((42, y + row_height, canvas_width - 42, y + row_height), fill="#CBD5E1")
+    output = BytesIO()
+    image.save(output, format="PNG", optimize=True)
+    return output.getvalue()
