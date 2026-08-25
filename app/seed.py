@@ -67,6 +67,24 @@ SAMPLE_PRODUCTS = [
 ]
 
 
+def build_seed_request() -> Request:
+    request = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/internal/seed",
+            "headers": [],
+            "client": ("127.0.0.1", 0),
+            "scheme": "http",
+            "server": ("seed", 80),
+            "query_string": b"",
+            "root_path": "",
+        }
+    )
+    request.state.request_id = "seed"
+    return request
+
+
 async def seed() -> None:
     password = os.getenv("SEED_ADMIN_PASSWORD")
     if not password or len(password) < 8 or password.startswith("replace-with"):
@@ -134,20 +152,7 @@ async def seed() -> None:
                 print(f"Admin user is up to date: {username}")
 
         product_service = ProductService(session)
-        seed_request = Request(
-            {
-                "type": "http",
-                "method": "SEED",
-                "path": "/internal/seed",
-                "headers": [],
-                "client": ("127.0.0.1", 0),
-                "scheme": "internal",
-                "server": ("seed", 0),
-                "query_string": b"",
-                "root_path": "",
-            }
-        )
-        seed_request.state.request_id = "seed"
+        seed_request = build_seed_request()
         for payload in SAMPLE_PRODUCTS:
             exists = await session.scalar(select(Product.id).where(Product.name == payload.name))
             if exists is None:

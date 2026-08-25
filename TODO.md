@@ -2,7 +2,7 @@
 
 Holat: P0–P6 implementatsiya va release verification 2026-08-24 kuni yakunlangan. P7 production rollout tayyorlangan, lekin live muhitga deploy qilish uchun production vakolati/targeti berilmagani sababli bajarilgan deb belgilanmaydi.
 
-Joriy dalil: backend Ruff va 38 test, panel ESLint/TypeScript va 16 test, panel production build, Compose render, isolated API image/health, toza va `20260821_0003` legacy PostgreSQL migration hamda PostgreSQL API smoke o'tgan. Bu local/isolated dalil production live proof emas. Operator tartibi `docs/RBAC_AUDIT_RUNBOOK.md`da.
+Joriy dalil: backend Ruff va 41 test, panel ESLint/TypeScript va 16 test, panel production build, Compose render, isolated API image/health, toza va `20260821_0003` legacy PostgreSQL migration hamda PostgreSQL API smoke o'tgan. Bu local/isolated dalil production live proof emas. Operator tartibi `docs/RBAC_AUDIT_RUNBOOK.md`da.
 
 Qamrov: `/Users/baxodir/Documents/Works/alfa/api` FastAPI backend va yonidagi `/Users/baxodir/Documents/Works/alfa/panel` React panel
 
