@@ -22,6 +22,7 @@ def _parse_origins(value: Any) -> list[str]:
 
 
 Origins = Annotated[list[str], NoDecode, BeforeValidator(_parse_origins)]
+MAX_JWT_EXPIRE_MINUTES = 30 * 24 * 60
 
 
 class Settings(BaseSettings):
@@ -40,7 +41,7 @@ class Settings(BaseSettings):
     database_url: str = "postgresql+asyncpg://alfateks:alfateks@db:5432/alfateks"
     jwt_secret_key: SecretStr = Field(min_length=32)
     jwt_algorithm: str = "HS256"
-    jwt_expire_minutes: int = Field(default=60, ge=5, le=1440)
+    jwt_expire_minutes: int = Field(default=60, ge=5, le=MAX_JWT_EXPIRE_MINUTES)
     jwt_issuer: str = "alfateks-api"
     jwt_audience: str = "alfateks-clients"
     activity_update_minutes: int = Field(default=5, ge=1, le=60)

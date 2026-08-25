@@ -110,7 +110,7 @@ avoid unbounded bitmap memory. The `xls` query alias returns modern XLSX content
 
 ## Configuration
 
-See `.env.example`. Required production values include `DATABASE_URL`, a random `JWT_SECRET_KEY` of at least 32 characters, and the exact `CORS_ORIGINS`. Review `JWT_ISSUER`, `JWT_AUDIENCE`, session activity throttling, login rate limits, and audit query bounds for the deployment. `ALLOW_NEGATIVE_STOCK` defaults to `false`. Never commit `.env` or real credentials.
+See `.env.example`. Required production values include `DATABASE_URL`, a random `JWT_SECRET_KEY` of at least 32 characters, and the exact `CORS_ORIGINS`. `JWT_EXPIRE_MINUTES` accepts 5 minutes through 43,200 minutes (30 days), preserving the existing long-lived deployment contract while server-side revocation remains authoritative. Review `JWT_ISSUER`, `JWT_AUDIENCE`, session activity throttling, login rate limits, and audit query bounds for the deployment. `ALLOW_NEGATIVE_STOCK` defaults to `false`. Never commit `.env` or real credentials.
 
 Manual migration commands:
 
