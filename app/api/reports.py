@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends, Query, Request, Response
 from app.api.dependencies import SessionDep, require_permissions
 from app.api.report_utils import report_response
 from app.core.config import get_settings
+from app.core.exceptions import AppError
 from app.core.permissions import PermissionCode
 from app.models.user import User
 from app.schemas.common import SuccessResponse
@@ -118,7 +119,10 @@ async def export_product_report(
         language,
         datetime.now(service.timezone),
     )
-    artifact = await to_thread.run_sync(partial(export_document, document, format))
+    try:
+        artifact = await to_thread.run_sync(partial(export_document, document, format))
+    except ValueError as exc:
+        raise AppError("REPORT_TOO_LARGE", str(exc), 422) from exc
     await AuditService(session).record_read(
         request,
         user,

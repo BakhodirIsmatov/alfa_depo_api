@@ -101,7 +101,7 @@ async def stock_out(
     response_model=SuccessResponse[StockTransactionResponse],
     status_code=status.HTTP_201_CREATED,
     summary="Adjust stock",
-    description="Set stock to the desired value and write an ADJUSTMENT transaction.",
+    description="Add the entered amount to current stock and write an ADJUSTMENT transaction.",
 )
 async def adjust_stock(
     product_id: int,
@@ -113,7 +113,7 @@ async def adjust_stock(
     transaction = await StockService(session).change(
         product_id,
         StockTransactionType.ADJUSTMENT,
-        payload.new_stock,
+        payload.quantity,
         payload.note,
         user,
         request,

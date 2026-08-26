@@ -22,9 +22,9 @@ async def test_product_create_read_update_and_delete(
     )
     assert created_response.status_code == 201
     created = created_response.json()["data"]
-    assert created["product_code"] == "ALF-000001"
-    assert created["qr_code"] == "ALF-000001"
-    assert created["barcode"] == "ALF-000001"
+    assert created["product_code"] == product_payload["product_code"]
+    assert created["qr_code"] == product_payload["product_code"]
+    assert created["barcode"] == product_payload["product_code"]
     assert created["unit"] == "kg"
     assert created["current_stock"] == "25.000"
 
@@ -34,16 +34,34 @@ async def test_product_create_read_update_and_delete(
 
     updated = await client.put(
         f"/api/v1/products/{created['id']}",
-        json={"name": "Updated Cotton", "color": "Ivory"},
+        json={"name": "Updated Cotton", "brand": None},
         headers=auth_headers,
     )
     assert updated.status_code == 200
     assert updated.json()["data"]["name"] == "Updated Cotton"
+    assert updated.json()["data"]["brand"] is None
 
     deleted = await client.delete(f"/api/v1/products/{created['id']}", headers=auth_headers)
     assert deleted.status_code == 200
     missing = await client.get(f"/api/v1/products/{created['id']}", headers=auth_headers)
     assert missing.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_product_label_templates_are_exposed(
+    client: httpx.AsyncClient, auth_headers: dict[str, str]
+) -> None:
+    response = await client.get("/api/v1/products/label-templates", headers=auth_headers)
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert [item["code"] for item in data] == [
+        "barcode-30x20",
+        "barcode-40x30",
+        "qr-30x30",
+        "qr-40x40",
+    ]
+    assert data[0]["kind"] == "barcode"
+    assert data[2]["kind"] == "qr"
 
 
 @pytest.mark.asyncio
@@ -65,16 +83,17 @@ async def test_product_search_and_lookup(
 
 
 @pytest.mark.asyncio
-async def test_client_cannot_override_backend_identifiers(
+async def test_backend_derives_identifiers_from_product_code(
     client: httpx.AsyncClient, auth_headers: dict[str, str], product_payload: dict
 ) -> None:
     response = await client.post(
         "/api/v1/products",
-        json={**product_payload, "qr_code": "CLIENT-QR", "barcode": "CLIENT-BARCODE"},
+        json={**product_payload, "product_code": "MANUAL-CODE-42", "qr_code": "CLIENT-QR", "barcode": "CLIENT-BARCODE"},
         headers=auth_headers,
     )
     assert response.status_code == 201
     data = response.json()["data"]
+    assert data["product_code"] == "MANUAL-CODE-42"
     assert data["product_code"] == data["qr_code"] == data["barcode"]
 
 
@@ -92,15 +111,19 @@ async def test_blank_required_product_name_is_rejected(
 
 
 @pytest.mark.asyncio
-async def test_required_alpha_fields_and_kg_only_are_enforced(
+async def test_optional_product_fields_and_kg_only_are_enforced(
     client: httpx.AsyncClient, auth_headers: dict[str, str], product_payload: dict
 ) -> None:
-    missing_brand = await client.post(
+    missing_optional_fields = await client.post(
         "/api/v1/products",
-        json={key: value for key, value in product_payload.items() if key != "brand"},
+        json={
+            key: value
+            for key, value in product_payload.items()
+            if key not in {"brand", "description", "color", "color_code"}
+        },
         headers=auth_headers,
     )
-    assert missing_brand.status_code == 422
+    assert missing_optional_fields.status_code == 201
     meter = await client.post(
         "/api/v1/products", json={**product_payload, "unit": "meter"}, headers=auth_headers
     )
@@ -108,22 +131,17 @@ async def test_required_alpha_fields_and_kg_only_are_enforced(
 
 
 @pytest.mark.asyncio
-async def test_required_product_fields_cannot_be_cleared_on_update(
+async def test_optional_product_fields_can_be_cleared_on_update(
     client: httpx.AsyncClient, auth_headers: dict[str, str], create_product
 ) -> None:
     product = await create_product()
-    null_description = await client.put(
+    cleared = await client.put(
         f"/api/v1/products/{product['id']}",
         json={"description": None},
         headers=auth_headers,
     )
-    assert null_description.status_code == 422
-    invalid_color_code = await client.put(
-        f"/api/v1/products/{product['id']}",
-        json={"color_code": "navy"},
-        headers=auth_headers,
-    )
-    assert invalid_color_code.status_code == 422
+    assert cleared.status_code == 200
+    assert cleared.json()["data"]["description"] is None
 
 
 @pytest.mark.asyncio
@@ -202,7 +220,7 @@ async def test_ocr_endpoint_returns_editable_suggestions(
         "extract_product_fields",
         lambda *_args, **_kwargs: parse_product_text(
             "Product: Premium Poplin\nLot No: LOT-42\nBrand: Alfateks\n"
-            "Color: Navy\nColor Code: #112233\nQuantity: 25.5 kg\nMinimum: 4 kg"
+            "Description: Premium weave\nQuantity: 25.5 kg\nMinimum: 4 kg"
         ),
     )
     response = await client.post(
@@ -215,7 +233,7 @@ async def test_ocr_endpoint_returns_editable_suggestions(
     assert data["fields"]["name"] == "Premium Poplin"
     assert data["fields"]["lot_number"] == "LOT-42"
     assert data["fields"]["brand"] == "Alfateks"
-    assert data["fields"]["color_code"] == "#112233"
+    assert data["fields"]["description"] == "Premium weave"
     assert data["fields"]["initial_stock"] == "25.5"
     assert data["fields"]["unit"] == "kg"
 
@@ -226,13 +244,13 @@ def test_ocr_parser_does_not_persist_or_invent_missing_fields() -> None:
     result = parse_product_text("Brand: Alfateks\nLot: L-100")
     assert result.fields.brand == "Alfateks"
     assert result.fields.lot_number == "L-100"
-    assert result.fields.color is None
+    assert result.fields.description is None
     assert result.warnings
 
 
-def test_seed_products_follow_required_alpha_contract() -> None:
+def test_seed_products_follow_product_contract() -> None:
     from app.seed import SAMPLE_PRODUCTS
 
     assert len(SAMPLE_PRODUCTS) == 5
     assert all(product.unit == "kg" for product in SAMPLE_PRODUCTS)
-    assert all(product.description and product.color_code for product in SAMPLE_PRODUCTS)
+    assert all(product.description for product in SAMPLE_PRODUCTS)

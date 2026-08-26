@@ -29,12 +29,13 @@ async def test_stock_in_out_adjustment_and_history(
 
     adjustment = await client.post(
         f"/api/v1/products/{product_id}/stock/adjust",
-        json={"new_stock": "12.000", "note": "Counted"},
+        json={"quantity": "12.000", "note": "Counted"},
         headers=auth_headers,
     )
     assert adjustment.status_code == 201
     assert Decimal(adjustment.json()["data"]["previous_stock"]) == Decimal("28.000")
-    assert Decimal(adjustment.json()["data"]["new_stock"]) == Decimal("12.000")
+    assert Decimal(adjustment.json()["data"]["quantity"]) == Decimal("12.000")
+    assert Decimal(adjustment.json()["data"]["new_stock"]) == Decimal("40.000")
 
     history = await client.get(f"/api/v1/products/{product_id}/stock/history", headers=auth_headers)
     assert history.status_code == 200

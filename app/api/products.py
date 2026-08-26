@@ -13,6 +13,7 @@ from app.models.user import User
 from app.schemas.common import MessageData, PaginatedData, SuccessResponse
 from app.schemas.product import (
     ProductCreate,
+    ProductLabelTemplateResponse,
     ProductOcrResult,
     ProductResponse,
     ProductUpdate,
@@ -24,6 +25,7 @@ from app.services.media import (
     store_product_image,
 )
 from app.services.ocr import extract_product_fields
+from app.services.product_label import list_product_label_templates
 from app.services.product import ProductService
 
 router = APIRouter(prefix="/products", tags=["Products"])
@@ -218,6 +220,32 @@ async def lookup_product(
         metadata={"identifier_type": "scan_identifier"},
     )
     return SuccessResponse(data=ProductResponse.model_validate(product))
+
+
+@router.get(
+    "/label-templates",
+    response_model=SuccessResponse[list[ProductLabelTemplateResponse]],
+    summary="List supported thermal label templates",
+    description=(
+        "Return the supported thermal sticker sizes for barcode and QR label generation. "
+        "Each template is tuned for mini printers and validated for one identifier per label."
+    ),
+)
+async def product_label_templates(
+    request: Request, user: ProductsView, session: SessionDep
+) -> SuccessResponse[list[ProductLabelTemplateResponse]]:
+    templates = [
+        ProductLabelTemplateResponse.model_validate(item, from_attributes=True)
+        for item in list_product_label_templates()
+    ]
+    await AuditService(session).record_read(
+        request,
+        user,
+        category="PRODUCT",
+        action="PRODUCT_LABEL_TEMPLATES_VIEWED",
+        metadata={"template_count": len(templates)},
+    )
+    return SuccessResponse(data=templates)
 
 
 @router.get(

@@ -98,9 +98,9 @@ class ProductRepository:
                     Product.product_code.ilike(pattern),
                     Product.barcode.ilike(pattern),
                     Product.qr_code.ilike(pattern),
-                    Product.color.ilike(pattern),
                     Product.lot_number.ilike(pattern),
                     Product.brand.ilike(pattern),
+                    Product.description.ilike(pattern),
                 )
             )
         total_query = select(func.count()).select_from(Product).where(*filters)

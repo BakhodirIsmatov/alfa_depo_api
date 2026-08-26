@@ -98,7 +98,10 @@ async def export_daily_dashboard_report(
             422,
         )
     document = daily_report_document(report, language)
-    artifact = await to_thread.run_sync(partial(export_document, document, format))
+    try:
+        artifact = await to_thread.run_sync(partial(export_document, document, format))
+    except ValueError as exc:
+        raise AppError("REPORT_TOO_LARGE", str(exc), 422) from exc
     await AuditService(session).record_read(
         request,
         user,

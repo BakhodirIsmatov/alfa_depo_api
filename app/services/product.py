@@ -1,5 +1,4 @@
 from math import ceil
-from uuid import uuid4
 
 from fastapi import Request
 from sqlalchemy.exc import IntegrityError
@@ -77,14 +76,19 @@ class ProductService:
         )
 
     async def create(self, payload: ProductCreate, actor: User, request: Request) -> Product:
-        provisional = f"TMP-{uuid4().hex[:24]}"
-        generated_code = provisional
-        values = payload.model_dump(exclude={"initial_stock", "initial_stock_note"})
+        values = payload.model_dump(exclude={"initial_stock", "product_code"})
+        manual_code = payload.product_code
+        code_conflict, _ = await self.products.identifier_exists(qr_code=manual_code)
+        if code_conflict:
+            raise ConflictError(
+                "PRODUCT_CODE_CONFLICT",
+                "Product code conflicts with an existing scan identifier",
+            )
         product = Product(
             **values,
-            product_code=provisional,
-            qr_code=provisional,
-            barcode=provisional,
+            product_code=manual_code,
+            qr_code=manual_code,
+            barcode=manual_code,
             current_stock=payload.initial_stock,
             created_by=actor.id,
             updated_by=actor.id,
@@ -92,18 +96,6 @@ class ProductService:
         self.products.add(product)
         try:
             await self.session.flush()
-            generated_code = f"ALF-{product.id:06d}"
-            code_conflict, _ = await self.products.identifier_exists(
-                qr_code=generated_code, exclude_id=product.id
-            )
-            if code_conflict:
-                raise ConflictError(
-                    "PRODUCT_CODE_CONFLICT",
-                    "Generated product code conflicts with an existing scan identifier",
-                )
-            product.product_code = generated_code
-            product.qr_code = generated_code
-            product.barcode = generated_code
             actor_role = actor.role.code
             if payload.initial_stock > 0:
                 initial_transaction = StockTransaction(
@@ -112,7 +104,7 @@ class ProductService:
                     quantity=payload.initial_stock,
                     previous_stock=0,
                     new_stock=payload.initial_stock,
-                    note=payload.initial_stock_note or "Initial stock",
+                    note="Initial stock",
                     created_by=actor.id,
                     actor_username=actor.username,
                     actor_full_name=actor.full_name,
@@ -154,7 +146,7 @@ class ProductService:
             await self.session.commit()
         except IntegrityError as exc:
             await self.session.rollback()
-            await self._raise_identifier_conflict(generated_code, generated_code, exc)
+            await self._raise_identifier_conflict(manual_code, manual_code, exc)
         await self.session.refresh(product)
         return product
 
@@ -164,6 +156,18 @@ class ProductService:
         product = await self.get(product_id)
         before = _snapshot(product)
         values = payload.model_dump(exclude_unset=True)
+        if "product_code" in values:
+            product_code = values["product_code"]
+            code_conflict, _ = await self.products.identifier_exists(
+                qr_code=product_code, exclude_id=product.id
+            )
+            if code_conflict:
+                raise ConflictError(
+                    "PRODUCT_CODE_CONFLICT",
+                    "Product code conflicts with an existing scan identifier",
+                )
+            product.qr_code = product_code
+            product.barcode = product_code
         for field, value in values.items():
             setattr(product, field, value)
         product.updated_by = actor.id

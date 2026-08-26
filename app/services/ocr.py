@@ -11,13 +11,6 @@ from app.schemas.product import ProductOcrFields, ProductOcrResult
 
 FIELD_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     (
-        "color_code",
-        re.compile(
-            r"^(?:rang|renk|color|colour|цвет)\s*(?:kodi|kodu|code|код)\s*[:#-]?\s*(.+)$",
-            re.I,
-        ),
-    ),
-    (
         "minimum_stock",
         re.compile(
             r"^(?:minimum|min\.?)(?:\s+(?:miqdor|miktar|stock|stok|qty))?\s*[:#-]?\s*(.+)$",
@@ -41,10 +34,6 @@ FIELD_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     (
         "brand",
         re.compile(r"^(?:marka|brand|brend|марка|бренд)\s*[:#-]?\s*(.+)$", re.I),
-    ),
-    (
-        "color",
-        re.compile(r"^(?:rang|renk|color|colour|цвет)\s*[:#-]?\s*(.+)$", re.I),
     ),
     (
         "description",
@@ -86,11 +75,6 @@ def parse_product_text(raw_text: str, *, average_confidence: float = 0.75) -> Pr
                 if numeric is None:
                     continue
                 values[field] = numeric
-            elif field == "color_code":
-                color_match = re.search(r"#[0-9A-Fa-f]{6}", value)
-                if not color_match:
-                    continue
-                values[field] = color_match.group(0).upper()
             elif value:
                 values[field] = value[: 5000 if field == "description" else 180]
             confidence[field] = round(max(0.0, min(1.0, average_confidence)), 2)

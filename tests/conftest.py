@@ -59,12 +59,11 @@ async def auth_headers(client: httpx.AsyncClient) -> dict[str, str]:
 @pytest.fixture
 def product_payload() -> dict:
     return {
+        "product_code": "ALF-COTTON-001",
         "name": "Premium Cotton Poplin",
         "description": "Fine woven textile",
         "lot_number": "LOT-001",
         "brand": "ALFATEKS",
-        "color": "White",
-        "color_code": "#FFFFFF",
         "unit": "kg",
         "minimum_stock": "10.000",
         "initial_stock": "25.000",

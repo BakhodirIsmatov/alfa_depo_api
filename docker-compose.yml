@@ -41,7 +41,7 @@ services:
       REPORT_MAX_EXPORT_ROWS: ${REPORT_MAX_EXPORT_ROWS:-5000}
       REPORT_PNG_MAX_ROWS: ${REPORT_PNG_MAX_ROWS:-200}
     ports:
-      - "8000:8000"
+      - "8100:8000"
     volumes:
       - media_data:/app/media
     depends_on:

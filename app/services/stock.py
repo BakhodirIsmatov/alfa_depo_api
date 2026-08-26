@@ -60,8 +60,8 @@ class StockService:
             new_stock = previous - value
             quantity = value
         else:
-            new_stock = value
-            quantity = abs(new_stock - previous)
+            new_stock = previous + value
+            quantity = value
         if new_stock < 0 and not get_settings().allow_negative_stock:
             raise AppError(
                 "INSUFFICIENT_STOCK",

@@ -12,7 +12,7 @@ class StockChangeRequest(BaseModel):
 
 
 class StockAdjustmentRequest(BaseModel):
-    new_stock: Decimal = Field(max_digits=14, decimal_places=3)
+    quantity: Decimal = Field(max_digits=14, decimal_places=3)
     note: str | None = Field(default=None, max_length=500)
 
 

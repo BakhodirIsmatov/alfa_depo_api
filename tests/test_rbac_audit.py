@@ -100,7 +100,7 @@ async def test_role_permission_matrix_and_live_reporter_toggle(
         ("get", "/api/v1/reports/products", None),
         ("get", f"/api/v1/products/{product_id}/stock/history", None),
         ("post", f"/api/v1/products/{product_id}/stock/in", {"quantity": "1"}),
-        ("post", f"/api/v1/products/{product_id}/stock/adjust", {"new_stock": "2"}),
+        ("post", f"/api/v1/products/{product_id}/stock/adjust", {"quantity": "2"}),
     ]
     for method, path, payload in forbidden:
         response = await client.request(method, path, json=payload, headers=user_headers)

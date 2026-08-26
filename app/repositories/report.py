@@ -113,7 +113,7 @@ class ReportRepository:
             (
                 await self.session.scalars(
                     select(Product.brand)
-                    .where(Product.deleted_at.is_(None))
+                    .where(Product.deleted_at.is_(None), Product.brand.is_not(None))
                     .distinct()
                     .order_by(Product.brand.asc())
                 )
@@ -123,7 +123,7 @@ class ReportRepository:
             (
                 await self.session.scalars(
                     select(Product.color)
-                    .where(Product.deleted_at.is_(None))
+                    .where(Product.deleted_at.is_(None), Product.color.is_not(None))
                     .distinct()
                     .order_by(Product.color.asc())
                 )

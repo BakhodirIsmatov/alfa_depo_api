@@ -1,7 +1,9 @@
 from decimal import Decimal
+from io import BytesIO
 
 import httpx
 import pytest
+from PIL import Image
 
 
 @pytest.mark.asyncio
@@ -137,6 +139,20 @@ async def test_png_export_limit_is_enforced(
 
 
 @pytest.mark.asyncio
+async def test_png_export_uses_a4_landscape_canvas(
+    client: httpx.AsyncClient,
+    auth_headers: dict[str, str],
+    create_product,
+) -> None:
+    await create_product(name="PNG A4", lot_number="PNG-A4")
+    response = await client.get("/api/v1/reports/products/export?format=png", headers=auth_headers)
+    assert response.status_code == 200
+    image = Image.open(BytesIO(response.content))
+    assert image.width > image.height
+    assert image.size == (1753, 1240)
+
+
+@pytest.mark.asyncio
 async def test_daily_dashboard_report_calculates_in_out_and_adjustments(
     client: httpx.AsyncClient, auth_headers: dict[str, str], create_product
 ) -> None:
@@ -153,7 +169,7 @@ async def test_daily_dashboard_report_calculates_in_out_and_adjustments(
     )
     adjustment = await client.post(
         f"/api/v1/products/{product['id']}/stock/adjust",
-        json={"new_stock": "12", "note": "count"},
+        json={"quantity": "12", "note": "count"},
         headers=auth_headers,
     )
     assert stock_in.status_code == stock_out.status_code == adjustment.status_code == 201
@@ -164,14 +180,14 @@ async def test_daily_dashboard_report_calculates_in_out_and_adjustments(
     summary = data["summary"]
     assert Decimal(summary["stock_in"]) == Decimal("10")
     assert Decimal(summary["stock_out"]) == Decimal("3")
-    assert Decimal(summary["adjustment_in"]) == Decimal("5")
+    assert Decimal(summary["adjustment_in"]) == Decimal("12")
     assert Decimal(summary["adjustment_out"]) == Decimal("0")
-    assert Decimal(summary["net_change"]) == Decimal("12")
+    assert Decimal(summary["net_change"]) == Decimal("19")
     assert summary["transaction_count"] == 3
     assert summary["affected_products"] == 1
     movement = data["products"][0]
     assert Decimal(movement["opening_stock"]) == Decimal("0")
-    assert Decimal(movement["closing_stock"]) == Decimal("12")
+    assert Decimal(movement["closing_stock"]) == Decimal("19")
 
     exported = await client.get(
         f"/api/v1/dashboard/daily/export?date={data['report_date']}&format=xlsx",

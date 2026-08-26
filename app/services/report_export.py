@@ -31,6 +31,18 @@ from app.schemas.report import (
     ReportLanguage,
 )
 
+A4_LANDSCAPE_WIDTH_MM, A4_LANDSCAPE_HEIGHT_MM = 297, 210
+PNG_DPI = 150
+MM_PER_INCH = 25.4
+PNG_PAGE_WIDTH = int(A4_LANDSCAPE_WIDTH_MM / MM_PER_INCH * PNG_DPI)
+PNG_PAGE_HEIGHT = int(A4_LANDSCAPE_HEIGHT_MM / MM_PER_INCH * PNG_DPI)
+PNG_MARGIN = 32
+PNG_TITLE_HEIGHT = 88
+PNG_SUMMARY_HEIGHT = 44
+PNG_TABLE_HEADER_HEIGHT = 34
+PNG_TABLE_ROW_HEIGHT = 26
+PNG_TABLE_FOOTER = 20
+
 
 @dataclass(frozen=True)
 class ExportColumn:
@@ -461,54 +473,70 @@ def _truncate(value: Any, width: int) -> str:
 
 
 def _png(document: ReportDocument) -> bytes:
-    canvas_width = 1800
-    title_height = 150
-    summary_height = 62
-    header_height = 48
-    row_height = 42
-    canvas_height = (
-        title_height + summary_height + header_height + max(1, len(document.rows)) * row_height + 36
+    rows = max(1, len(document.rows))
+    required_height = (
+        PNG_TITLE_HEIGHT
+        + PNG_SUMMARY_HEIGHT
+        + PNG_TABLE_HEADER_HEIGHT
+        + rows * PNG_TABLE_ROW_HEIGHT
+        + PNG_TABLE_FOOTER
+        + PNG_MARGIN * 2
     )
-    image = Image.new("RGB", (canvas_width, canvas_height), "white")
-    draw = ImageDraw.Draw(image)
-    title_font = _load_png_font(30, bold=True)
-    subtitle_font = _load_png_font(17)
-    header_font = _load_png_font(16, bold=True)
-    body_font = _load_png_font(15)
-    draw.rectangle((0, 0, canvas_width, title_height), fill="#16332A")
-    draw.text((42, 32), document.title, font=title_font, fill="white")
-    draw.text((42, 88), document.subtitle, font=subtitle_font, fill="#D8E7E2")
-    summary = "  |  ".join(f"{label}: {value}" for label, value in document.summary)
-    draw.text((42, title_height + 20), summary, font=header_font, fill="#334155")
+    if required_height > PNG_PAGE_HEIGHT:
+        raise ValueError(
+            f"PNG export exceeds A4 landscape height with {len(document.rows)} rows"
+        )
 
-    table_top = title_height + summary_height
+    image = Image.new("RGB", (PNG_PAGE_WIDTH, PNG_PAGE_HEIGHT), "white")
+    draw = ImageDraw.Draw(image)
+    title_font = _load_png_font(22, bold=True)
+    subtitle_font = _load_png_font(12)
+    header_font = _load_png_font(11, bold=True)
+    body_font = _load_png_font(10)
+    draw.rectangle((0, 0, PNG_PAGE_WIDTH, PNG_TITLE_HEIGHT + PNG_MARGIN), fill="#16332A")
+    draw.text((PNG_MARGIN, 24), document.title, font=title_font, fill="white")
+    draw.text((PNG_MARGIN, 56), document.subtitle, font=subtitle_font, fill="#D8E7E2")
+    summary = "  |  ".join(f"{label}: {value}" for label, value in document.summary)
+    draw.text((PNG_MARGIN, PNG_TITLE_HEIGHT + PNG_MARGIN - 4), summary, font=header_font, fill="#334155")
+
+    table_top = PNG_TITLE_HEIGHT + PNG_SUMMARY_HEIGHT + PNG_MARGIN
     width_total = sum(column.width for column in document.columns)
-    widths = [int((canvas_width - 84) * column.width / width_total) for column in document.columns]
-    widths[-1] += canvas_width - 84 - sum(widths)
-    draw.rectangle((42, table_top, canvas_width - 42, table_top + header_height), fill="#176B54")
-    x = 42
+    available_width = PNG_PAGE_WIDTH - PNG_MARGIN * 2
+    widths = [int(available_width * column.width / width_total) for column in document.columns]
+    widths[-1] += available_width - sum(widths)
+    draw.rectangle(
+        (PNG_MARGIN, table_top, PNG_PAGE_WIDTH - PNG_MARGIN, table_top + PNG_TABLE_HEADER_HEIGHT),
+        fill="#176B54",
+    )
+    x = PNG_MARGIN
     for column, width in zip(document.columns, widths, strict=True):
         draw.text(
-            (x + 8, table_top + 14),
+            (x + 6, table_top + 10),
             _truncate(column.title, column.width),
             font=header_font,
             fill="white",
         )
         x += width
     for row_index, row in enumerate(document.rows):
-        y = table_top + header_height + row_index * row_height
+        y = table_top + PNG_TABLE_HEADER_HEIGHT + row_index * PNG_TABLE_ROW_HEIGHT
         if row_index % 2:
-            draw.rectangle((42, y, canvas_width - 42, y + row_height), fill="#F1F5F9")
-        x = 42
+            draw.rectangle(
+                (PNG_MARGIN, y, PNG_PAGE_WIDTH - PNG_MARGIN, y + PNG_TABLE_ROW_HEIGHT),
+                fill="#F1F5F9",
+            )
+        x = PNG_MARGIN
         for column, width in zip(document.columns, widths, strict=True):
             draw.text(
-                (x + 8, y + 12),
+                (x + 6, y + 8),
                 _truncate(row.get(column.key, ""), column.width),
                 font=body_font,
                 fill="#172033",
             )
             x += width
-        draw.line((42, y + row_height, canvas_width - 42, y + row_height), fill="#CBD5E1")
+        draw.line(
+            (PNG_MARGIN, y + PNG_TABLE_ROW_HEIGHT, PNG_PAGE_WIDTH - PNG_MARGIN, y + PNG_TABLE_ROW_HEIGHT),
+            fill="#CBD5E1",
+        )
     output = BytesIO()
     image.save(output, format="PNG", optimize=True)
     return output.getvalue()

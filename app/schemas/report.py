@@ -61,9 +61,9 @@ class ProductReportItem(BaseModel):
     id: int
     product_code: str
     name: str
-    brand: str
-    color: str
-    color_code: str
+    brand: str | None
+    color: str | None
+    color_code: str | None
     lot_number: str
     current_stock: Decimal
     minimum_stock: Decimal
