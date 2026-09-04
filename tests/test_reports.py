@@ -1,3 +1,4 @@
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from io import BytesIO
@@ -5,7 +6,7 @@ from io import BytesIO
 import httpx
 import pytest
 from openpyxl import load_workbook
-from PIL import Image
+from PIL import Image, ImageDraw
 from sqlalchemy import update
 
 from app.core.database import AsyncSessionFactory
@@ -192,16 +193,29 @@ async def test_export_layout_compacts_columns_and_balances_png_header(
     )
     assert png_response.status_code == 200
     image = Image.open(BytesIO(png_response.content)).convert("RGB")
-    assert image.getpixel((0, report_export.PNG_HEADER_HEIGHT - 2)) == (47, 158, 125)
-    assert image.getpixel((0, report_export.PNG_HEADER_HEIGHT)) == (255, 255, 255)
-
-    table_y = report_export.PNG_HEADER_HEIGHT + report_export.PNG_SUMMARY_HEIGHT + 1
-    assert image.getpixel((report_export.PNG_MARGIN + 1, table_y)) == (23, 107, 84)
-    assert image.getpixel((image.width - report_export.PNG_MARGIN - 1, table_y)) == (
-        255,
-        255,
-        255,
+    report_header_height = max(
+        report_export.PNG_HEADER_MIN_HEIGHT,
+        report_export.PNG_HEADER_VERTICAL_PADDING * 2
+        + report_export.PNG_TITLE_LINE_HEIGHT
+        + report_export.PNG_HEADER_TEXT_GAP
+        + report_export.PNG_SUBTITLE_LINE_HEIGHT,
     )
+    accent_y = report_export.PNG_MARGIN + report_header_height - 2
+    table_y = (
+        report_export.PNG_MARGIN
+        + report_header_height
+        + report_export.PNG_SUMMARY_TOP_PADDING
+        + report_export.PNG_TABLE_BODY_LINE_HEIGHT
+        + report_export.PNG_SUMMARY_BOTTOM_PADDING
+        + 1
+    )
+    accent_x = [x for x in range(image.width) if image.getpixel((x, accent_y)) == (47, 158, 125)]
+    table_x = [x for x in range(image.width) if image.getpixel((x, table_y)) != (255, 255, 255)]
+    assert (min(accent_x), max(accent_x)) == (min(table_x), max(table_x))
+    assert min(table_x) == image.width - 1 - max(table_x)
+    assert len(table_x) >= (
+        image.width - report_export.PNG_MARGIN * 2
+    ) * report_export.TABLE_MIN_WIDTH_RATIO
 
     xlsx_response = await client.get(
         "/api/v1/reports/products/export?format=xlsx&language=uz",
@@ -210,8 +224,61 @@ async def test_export_layout_compacts_columns_and_balances_png_header(
     assert xlsx_response.status_code == 200
     workbook = load_workbook(BytesIO(xlsx_response.content), read_only=False)
     sheet = workbook.active
-    assert sheet.column_dimensions["B"].width < 28
+    assert 16 <= sheet.column_dimensions["B"].width < 28
     assert sheet.row_dimensions[6].height == 28
+
+
+def test_png_text_wrap_preserves_long_values() -> None:
+    image = Image.new("RGB", (200, 100), "white")
+    draw = ImageDraw.Draw(image)
+    font = report_export._load_png_font(13)
+    value = "Uzun mahsulot nomi barcha so‘zlari bilan saqlanishi kerak"
+
+    lines = report_export._wrap_text(draw, value, font, 110)
+
+    assert len(lines) > 1
+    assert " ".join(lines) == value
+    assert all("…" not in line for line in lines)
+
+
+def test_pdf_widths_balance_short_content_and_expand_for_long_values() -> None:
+    regular, bold = report_export._register_pdf_fonts()
+    short_document = report_export.ReportDocument(
+        title="Report",
+        subtitle="Generated",
+        columns=[
+            report_export.ExportColumn("code", "Code", 12),
+            report_export.ExportColumn("name", "Name", 28),
+        ],
+        rows=[{"code": "P1", "name": "Atlas"}],
+        summary=[],
+        filename="report",
+    )
+    available_width = 700.0
+
+    short_widths = report_export._pdf_column_widths(
+        short_document,
+        regular,
+        bold,
+        available_width,
+    )
+    long_document = replace(
+        short_document,
+        rows=[{"code": "P1", "name": "Professional textile product " * 10}],
+    )
+    long_widths = report_export._pdf_column_widths(
+        long_document,
+        regular,
+        bold,
+        available_width,
+    )
+
+    assert sum(short_widths) == pytest.approx(
+        available_width * report_export.TABLE_MIN_WIDTH_RATIO
+    )
+    assert short_widths[1] > short_widths[0]
+    assert long_widths[1] > short_widths[1]
+    assert sum(long_widths) <= available_width
 
 
 @pytest.mark.asyncio
