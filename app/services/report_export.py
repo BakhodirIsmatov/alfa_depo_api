@@ -37,7 +37,7 @@ MM_PER_INCH = 25.4
 PNG_PAGE_WIDTH = int(A4_LANDSCAPE_WIDTH_MM / MM_PER_INCH * PNG_DPI)
 PNG_PAGE_HEIGHT = int(A4_LANDSCAPE_HEIGHT_MM / MM_PER_INCH * PNG_DPI)
 PNG_MARGIN = 32
-PNG_TITLE_HEIGHT = 88
+PNG_TITLE_HEIGHT = 70
 PNG_SUMMARY_HEIGHT = 44
 PNG_TABLE_HEADER_HEIGHT = 34
 PNG_TABLE_ROW_HEIGHT = 26
@@ -79,12 +79,10 @@ TRANSLATIONS = {
         "color": "Renk",
         "lot": "Lot",
         "current": "Mevcut (kg)",
-        "minimum": "Minimum (kg)",
         "status": "Durum",
         "created": "Oluşturuldu",
         "total_products": "Toplam ürün",
         "total_stock": "Toplam stok (kg)",
-        "total_minimum": "Toplam minimum (kg)",
         "low": "Düşük stok",
         "out": "Stokta yok",
         "date": "Tarih",
@@ -113,12 +111,10 @@ TRANSLATIONS = {
         "color": "Color",
         "lot": "Lot",
         "current": "Current (kg)",
-        "minimum": "Minimum (kg)",
         "status": "Status",
         "created": "Created",
         "total_products": "Total products",
         "total_stock": "Total stock (kg)",
-        "total_minimum": "Total minimum (kg)",
         "low": "Low stock",
         "out": "Out of stock",
         "date": "Date",
@@ -147,12 +143,10 @@ TRANSLATIONS = {
         "color": "Rang",
         "lot": "Lot",
         "current": "Mavjud (kg)",
-        "minimum": "Minimum (kg)",
         "status": "Holat",
         "created": "Yaratilgan",
         "total_products": "Jami mahsulot",
         "total_stock": "Jami stok (kg)",
-        "total_minimum": "Jami minimum (kg)",
         "low": "Kam qolgan",
         "out": "Tugagan",
         "date": "Sana",
@@ -215,7 +209,6 @@ def product_report_document(
             "color": item.color,
             "lot": item.lot_number,
             "current": _decimal(item.current_stock),
-            "minimum": _decimal(item.minimum_stock),
             "status": _status(item.stock_status, labels),
             "created": item.created_at.strftime("%Y-%m-%d"),
         }
@@ -231,7 +224,6 @@ def product_report_document(
             ExportColumn("color", labels["color"], 14),
             ExportColumn("lot", labels["lot"], 18),
             ExportColumn("current", labels["current"], 14),
-            ExportColumn("minimum", labels["minimum"], 14),
             ExportColumn("status", labels["status"], 14),
             ExportColumn("created", labels["created"], 14),
         ],
@@ -239,7 +231,6 @@ def product_report_document(
         summary=[
             (labels["total_products"], summary.total_products),
             (labels["total_stock"], _decimal(summary.total_current_stock)),
-            (labels["total_minimum"], _decimal(summary.total_minimum_stock)),
             (labels["low"], summary.low_stock_products),
             (labels["out"], summary.out_of_stock_products),
         ],
