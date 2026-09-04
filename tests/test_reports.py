@@ -11,6 +11,7 @@ from sqlalchemy import update
 from app.core.database import AsyncSessionFactory
 from app.models.product import Product
 from app.models.stock_transaction import StockTransaction, StockTransactionType
+from app.services import report_export
 
 
 @pytest.mark.asyncio
@@ -170,6 +171,47 @@ async def test_png_export_uses_a4_landscape_canvas(
     image = Image.open(BytesIO(response.content))
     assert image.width > image.height
     assert image.size == (1753, 1240)
+
+
+@pytest.mark.asyncio
+async def test_export_layout_compacts_columns_and_balances_png_header(
+    client: httpx.AsyncClient,
+    auth_headers: dict[str, str],
+    create_product,
+) -> None:
+    await create_product(
+        product_code="P1",
+        name="Atlas",
+        lot_number="L1",
+        brand="A",
+    )
+
+    png_response = await client.get(
+        "/api/v1/reports/products/export?format=png&language=uz",
+        headers=auth_headers,
+    )
+    assert png_response.status_code == 200
+    image = Image.open(BytesIO(png_response.content)).convert("RGB")
+    assert image.getpixel((0, report_export.PNG_HEADER_HEIGHT - 2)) == (47, 158, 125)
+    assert image.getpixel((0, report_export.PNG_HEADER_HEIGHT)) == (255, 255, 255)
+
+    table_y = report_export.PNG_HEADER_HEIGHT + report_export.PNG_SUMMARY_HEIGHT + 1
+    assert image.getpixel((report_export.PNG_MARGIN + 1, table_y)) == (23, 107, 84)
+    assert image.getpixel((image.width - report_export.PNG_MARGIN - 1, table_y)) == (
+        255,
+        255,
+        255,
+    )
+
+    xlsx_response = await client.get(
+        "/api/v1/reports/products/export?format=xlsx&language=uz",
+        headers=auth_headers,
+    )
+    assert xlsx_response.status_code == 200
+    workbook = load_workbook(BytesIO(xlsx_response.content), read_only=False)
+    sheet = workbook.active
+    assert sheet.column_dimensions["B"].width < 28
+    assert sheet.row_dimensions[6].height == 28
 
 
 @pytest.mark.asyncio

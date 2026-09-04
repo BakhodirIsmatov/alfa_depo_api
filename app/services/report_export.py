@@ -37,18 +37,25 @@ MM_PER_INCH = 25.4
 PNG_PAGE_WIDTH = int(A4_LANDSCAPE_WIDTH_MM / MM_PER_INCH * PNG_DPI)
 PNG_PAGE_HEIGHT = int(A4_LANDSCAPE_HEIGHT_MM / MM_PER_INCH * PNG_DPI)
 PNG_MARGIN = 32
-PNG_TITLE_HEIGHT = 70
-PNG_SUMMARY_HEIGHT = 44
-PNG_TABLE_HEADER_HEIGHT = 34
+PNG_HEADER_HEIGHT = 88
+PNG_HEADER_HORIZONTAL_PADDING = 32
+PNG_HEADER_VERTICAL_PADDING = 14
+PNG_HEADER_TEXT_GAP = 6
+PNG_SUMMARY_HEIGHT = 52
+PNG_SUMMARY_TOP_PADDING = 18
+PNG_TABLE_HEADER_HEIGHT = 32
 PNG_TABLE_ROW_HEIGHT = 26
-PNG_TABLE_FOOTER = 20
+PNG_TABLE_BOTTOM_PADDING = 32
+PNG_CELL_HORIZONTAL_PADDING = 8
+PNG_MIN_COLUMN_WIDTH = 48
+PNG_COLUMN_UNIT = 8
 
 
 @dataclass(frozen=True)
 class ExportColumn:
     key: str
     title: str
-    width: int
+    width: int  # Maximum width in character-based export units.
 
 
 @dataclass(frozen=True)
@@ -205,8 +212,8 @@ def product_report_document(
         {
             "code": item.product_code,
             "name": item.name,
-            "brand": item.brand,
-            "color": item.color,
+            "brand": item.brand or "—",
+            "color": item.color or "—",
             "lot": item.lot_number,
             "current": _decimal(item.current_stock),
             "status": _status(item.stock_status, labels),
@@ -372,8 +379,7 @@ def _pdf(document: ReportDocument) -> bytes:
             ]
         )
     available_width = landscape(A4)[0] - 20 * mm
-    width_total = sum(column.width for column in document.columns)
-    column_widths = [available_width * column.width / width_total for column in document.columns]
+    column_widths = _pdf_column_widths(document, regular, bold, available_width)
     table = Table(table_rows, colWidths=column_widths, repeatRows=1, hAlign="LEFT")
     table.setStyle(
         TableStyle(
@@ -408,6 +414,26 @@ def _excel_safe(value: Any) -> Any:
     return value
 
 
+def _visible_character_width(value: Any) -> int:
+    """Approximate an Excel character width without stretching short columns."""
+    return sum(2 if ord(character) > 0xFF else 1 for character in str(value))
+
+
+def _excel_column_widths(document: ReportDocument) -> list[float]:
+    widths: list[float] = []
+    for column in document.columns:
+        header_width = max(
+            (_visible_character_width(part) for part in column.title.split()),
+            default=0,
+        )
+        content_width = max(
+            (_visible_character_width(row.get(column.key, "")) for row in document.rows),
+            default=0,
+        )
+        widths.append(float(min(column.width, max(6, header_width + 2, content_width + 2))))
+    return widths
+
+
 def _xlsx(document: ReportDocument) -> bytes:
     workbook = Workbook()
     sheet = workbook.active
@@ -425,12 +451,16 @@ def _xlsx(document: ReportDocument) -> bytes:
     sheet["A4"].font = Font(bold=True, color="334155")
 
     header_row = 6
-    for index, column in enumerate(document.columns, start=1):
+    column_widths = _excel_column_widths(document)
+    sheet.row_dimensions[header_row].height = 28
+    for index, (column, column_width) in enumerate(
+        zip(document.columns, column_widths, strict=True), start=1
+    ):
         cell = sheet.cell(header_row, index, column.title)
         cell.font = Font(bold=True, color="FFFFFF")
         cell.fill = PatternFill("solid", fgColor="176B54")
         cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
-        sheet.column_dimensions[get_column_letter(index)].width = column.width
+        sheet.column_dimensions[get_column_letter(index)].width = column_width
     for row_index, row in enumerate(document.rows, start=header_row + 1):
         for column_index, column in enumerate(document.columns, start=1):
             cell = sheet.cell(row_index, column_index, _excel_safe(row.get(column.key, "")))
@@ -471,69 +501,234 @@ def _load_png_font(size: int, *, bold: bool = False):
     return ImageFont.load_default()
 
 
-def _truncate(value: Any, width: int) -> str:
+def _fit_widths(preferred: list[float], minimum: list[float], available: float) -> list[float]:
+    if sum(preferred) <= available:
+        return preferred
+
+    minimum_total = sum(minimum)
+    if minimum_total >= available:
+        scale = available / minimum_total
+        return [width * scale for width in minimum]
+
+    available_slack = available - minimum_total
+    preferred_slack = sum(
+        preferred_width - minimum_width
+        for preferred_width, minimum_width in zip(preferred, minimum, strict=True)
+    )
+    return [
+        minimum_width
+        + (preferred_width - minimum_width) * available_slack / preferred_slack
+        for preferred_width, minimum_width in zip(preferred, minimum, strict=True)
+    ]
+
+
+def _pdf_column_widths(
+    document: ReportDocument,
+    regular_font: str,
+    bold_font: str,
+    available_width: float,
+) -> list[float]:
+    horizontal_padding = 8.0
+    preferred: list[float] = []
+    minimum: list[float] = []
+    for column in document.columns:
+        header_width = pdfmetrics.stringWidth(column.title, bold_font, 7.3)
+        content_width = max(
+            (
+                pdfmetrics.stringWidth(str(row.get(column.key, "")), regular_font, 7.3)
+                for row in document.rows
+            ),
+            default=0.0,
+        )
+        maximum_width = column.width * 5.2
+        preferred.append(
+            min(maximum_width, max(30.0, header_width + horizontal_padding, content_width + 8.0))
+        )
+        minimum.append(30.0)
+    return _fit_widths(preferred, minimum, available_width)
+
+
+def _text_width(draw: ImageDraw.ImageDraw, value: Any, font: Any) -> float:
+    return float(draw.textlength(str(value), font=font))
+
+
+def _fit_text(draw: ImageDraw.ImageDraw, value: Any, font: Any, max_width: float) -> str:
     text = str(value)
-    maximum = max(6, int(width * 1.25))
-    return text if len(text) <= maximum else f"{text[: maximum - 1]}…"
+    if _text_width(draw, text, font) <= max_width:
+        return text
+
+    ellipsis = "…"
+    ellipsis_width = _text_width(draw, ellipsis, font)
+    if max_width <= ellipsis_width:
+        return ""
+
+    low = 0
+    high = len(text)
+    while low < high:
+        middle = (low + high + 1) // 2
+        if _text_width(draw, f"{text[:middle]}{ellipsis}", font) <= max_width:
+            low = middle
+        else:
+            high = middle - 1
+    return f"{text[:low]}{ellipsis}"
+
+
+def _png_column_widths(
+    draw: ImageDraw.ImageDraw,
+    document: ReportDocument,
+    header_font: Any,
+    body_font: Any,
+    available_width: int,
+) -> list[int]:
+    preferred: list[float] = []
+    minimum: list[float] = []
+    padding = PNG_CELL_HORIZONTAL_PADDING * 2
+    for column in document.columns:
+        header_width = _text_width(draw, column.title, header_font)
+        content_width = max(
+            (_text_width(draw, row.get(column.key, ""), body_font) for row in document.rows),
+            default=0.0,
+        )
+        maximum_width = column.width * PNG_COLUMN_UNIT + padding
+        preferred.append(
+            min(
+                maximum_width,
+                max(PNG_MIN_COLUMN_WIDTH, header_width + padding, content_width + padding),
+            )
+        )
+        minimum.append(float(PNG_MIN_COLUMN_WIDTH))
+
+    fitted = _fit_widths(preferred, minimum, float(available_width))
+    widths = [max(1, round(width)) for width in fitted]
+    overflow = sum(widths) - available_width
+    for index in range(len(widths) - 1, -1, -1):
+        if overflow <= 0:
+            break
+        reduction = min(overflow, widths[index] - 1)
+        widths[index] -= reduction
+        overflow -= reduction
+    return widths
+
+
+def _draw_vertically_centered_text(
+    draw: ImageDraw.ImageDraw,
+    xy: tuple[float, float],
+    height: float,
+    text: str,
+    *,
+    font: Any,
+    fill: str,
+) -> None:
+    bounds = draw.textbbox((0, 0), text, font=font)
+    text_height = bounds[3] - bounds[1]
+    draw.text((xy[0], xy[1] + (height - text_height) / 2 - bounds[1]), text, font=font, fill=fill)
 
 
 def _png(document: ReportDocument) -> bytes:
     rows = max(1, len(document.rows))
     required_height = (
-        PNG_TITLE_HEIGHT
+        PNG_HEADER_HEIGHT
         + PNG_SUMMARY_HEIGHT
         + PNG_TABLE_HEADER_HEIGHT
         + rows * PNG_TABLE_ROW_HEIGHT
-        + PNG_TABLE_FOOTER
-        + PNG_MARGIN * 2
+        + PNG_TABLE_BOTTOM_PADDING
     )
     if required_height > PNG_PAGE_HEIGHT:
         raise ValueError(f"PNG export exceeds A4 landscape height with {len(document.rows)} rows")
 
     image = Image.new("RGB", (PNG_PAGE_WIDTH, PNG_PAGE_HEIGHT), "white")
     draw = ImageDraw.Draw(image)
-    title_font = _load_png_font(22, bold=True)
-    subtitle_font = _load_png_font(12)
-    header_font = _load_png_font(11, bold=True)
-    body_font = _load_png_font(10)
-    draw.rectangle((0, 0, PNG_PAGE_WIDTH, PNG_TITLE_HEIGHT + PNG_MARGIN), fill="#16332A")
-    draw.text((PNG_MARGIN, 24), document.title, font=title_font, fill="white")
-    draw.text((PNG_MARGIN, 56), document.subtitle, font=subtitle_font, fill="#D8E7E2")
+    title_font = _load_png_font(30, bold=True)
+    subtitle_font = _load_png_font(14)
+    header_font = _load_png_font(13, bold=True)
+    body_font = _load_png_font(13)
+    header_text_width = PNG_PAGE_WIDTH - PNG_HEADER_HORIZONTAL_PADDING * 2
+    title = _fit_text(draw, document.title, title_font, header_text_width)
+    subtitle = _fit_text(draw, document.subtitle, subtitle_font, header_text_width)
+    title_line_height = 36
+    subtitle_line_height = 20
+    draw.rectangle((0, 0, PNG_PAGE_WIDTH, PNG_HEADER_HEIGHT - 1), fill="#16332A")
+    draw.rectangle(
+        (0, PNG_HEADER_HEIGHT - 3, PNG_PAGE_WIDTH, PNG_HEADER_HEIGHT - 1),
+        fill="#2F9E7D",
+    )
+    _draw_vertically_centered_text(
+        draw,
+        (PNG_HEADER_HORIZONTAL_PADDING, PNG_HEADER_VERTICAL_PADDING),
+        title_line_height,
+        title,
+        font=title_font,
+        fill="white",
+    )
+    _draw_vertically_centered_text(
+        draw,
+        (
+            PNG_HEADER_HORIZONTAL_PADDING,
+            PNG_HEADER_VERTICAL_PADDING + title_line_height + PNG_HEADER_TEXT_GAP,
+        ),
+        subtitle_line_height,
+        subtitle,
+        font=subtitle_font,
+        fill="#D8E7E2",
+    )
     summary = "  |  ".join(f"{label}: {value}" for label, value in document.summary)
-    draw.text(
-        (PNG_MARGIN, PNG_TITLE_HEIGHT + PNG_MARGIN - 4), summary, font=header_font, fill="#334155"
+    summary = _fit_text(draw, summary, body_font, PNG_PAGE_WIDTH - PNG_MARGIN * 2)
+    _draw_vertically_centered_text(
+        draw,
+        (PNG_MARGIN, PNG_HEADER_HEIGHT + PNG_SUMMARY_TOP_PADDING),
+        PNG_SUMMARY_HEIGHT - PNG_SUMMARY_TOP_PADDING,
+        summary,
+        font=body_font,
+        fill="#475569",
     )
 
-    table_top = PNG_TITLE_HEIGHT + PNG_SUMMARY_HEIGHT + PNG_MARGIN
-    width_total = sum(column.width for column in document.columns)
+    table_top = PNG_HEADER_HEIGHT + PNG_SUMMARY_HEIGHT
     available_width = PNG_PAGE_WIDTH - PNG_MARGIN * 2
-    widths = [int(available_width * column.width / width_total) for column in document.columns]
-    widths[-1] += available_width - sum(widths)
+    widths = _png_column_widths(draw, document, header_font, body_font, available_width)
+    table_width = sum(widths)
+    table_right = PNG_MARGIN + table_width
     draw.rectangle(
-        (PNG_MARGIN, table_top, PNG_PAGE_WIDTH - PNG_MARGIN, table_top + PNG_TABLE_HEADER_HEIGHT),
+        (PNG_MARGIN, table_top, table_right, table_top + PNG_TABLE_HEADER_HEIGHT),
         fill="#176B54",
     )
     x = PNG_MARGIN
     for column, width in zip(document.columns, widths, strict=True):
-        draw.text(
-            (x + 6, table_top + 10),
-            _truncate(column.title, column.width),
+        header_text = _fit_text(
+            draw,
+            column.title,
+            header_font,
+            width - PNG_CELL_HORIZONTAL_PADDING * 2,
+        )
+        _draw_vertically_centered_text(
+            draw,
+            (x + PNG_CELL_HORIZONTAL_PADDING, table_top),
+            PNG_TABLE_HEADER_HEIGHT,
+            header_text,
             font=header_font,
             fill="white",
         )
         x += width
-    for row_index, row in enumerate(document.rows):
+    for row_index in range(rows):
         y = table_top + PNG_TABLE_HEADER_HEIGHT + row_index * PNG_TABLE_ROW_HEIGHT
         if row_index % 2:
             draw.rectangle(
-                (PNG_MARGIN, y, PNG_PAGE_WIDTH - PNG_MARGIN, y + PNG_TABLE_ROW_HEIGHT),
+                (PNG_MARGIN, y, table_right, y + PNG_TABLE_ROW_HEIGHT),
                 fill="#F1F5F9",
             )
         x = PNG_MARGIN
+        row = document.rows[row_index] if row_index < len(document.rows) else {}
         for column, width in zip(document.columns, widths, strict=True):
-            draw.text(
-                (x + 6, y + 8),
-                _truncate(row.get(column.key, ""), column.width),
+            cell_text = _fit_text(
+                draw,
+                row.get(column.key, ""),
+                body_font,
+                width - PNG_CELL_HORIZONTAL_PADDING * 2,
+            )
+            _draw_vertically_centered_text(
+                draw,
+                (x + PNG_CELL_HORIZONTAL_PADDING, y),
+                PNG_TABLE_ROW_HEIGHT,
+                cell_text,
                 font=body_font,
                 fill="#172033",
             )
@@ -542,11 +737,17 @@ def _png(document: ReportDocument) -> bytes:
             (
                 PNG_MARGIN,
                 y + PNG_TABLE_ROW_HEIGHT,
-                PNG_PAGE_WIDTH - PNG_MARGIN,
+                table_right,
                 y + PNG_TABLE_ROW_HEIGHT,
             ),
             fill="#CBD5E1",
         )
+    table_bottom = table_top + PNG_TABLE_HEADER_HEIGHT + rows * PNG_TABLE_ROW_HEIGHT
+    x = PNG_MARGIN
+    for width in widths[:-1]:
+        x += width
+        draw.line((x, table_top, x, table_bottom), fill="#CBD5E1")
+    draw.rectangle((PNG_MARGIN, table_top, table_right, table_bottom), outline="#B8C5D1", width=1)
     output = BytesIO()
     image.save(output, format="PNG", optimize=True)
     return output.getvalue()
