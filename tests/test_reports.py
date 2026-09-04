@@ -1,9 +1,16 @@
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from io import BytesIO
 
 import httpx
 import pytest
+from openpyxl import load_workbook
 from PIL import Image
+from sqlalchemy import update
+
+from app.core.database import AsyncSessionFactory
+from app.models.product import Product
+from app.models.stock_transaction import StockTransaction, StockTransactionType
 
 
 @pytest.mark.asyncio
@@ -11,6 +18,7 @@ async def test_product_report_filters_summary_and_options(
     client: httpx.AsyncClient, auth_headers: dict[str, str], create_product
 ) -> None:
     await create_product(
+        product_code="ALF-REPORT-H",
         name="Healthy Navy",
         lot_number="REPORT-H",
         brand="Report Brand A",
@@ -19,6 +27,7 @@ async def test_product_report_filters_summary_and_options(
         minimum_stock="10",
     )
     await create_product(
+        product_code="ALF-REPORT-L",
         name="Low Navy",
         lot_number="REPORT-L",
         brand="Report Brand A",
@@ -27,6 +36,7 @@ async def test_product_report_filters_summary_and_options(
         minimum_stock="10",
     )
     await create_product(
+        product_code="ALF-REPORT-E",
         name="Empty Black",
         lot_number="REPORT-O",
         brand="Report Brand B",
@@ -34,6 +44,16 @@ async def test_product_report_filters_summary_and_options(
         initial_stock="0",
         minimum_stock="10",
     )
+    async with AsyncSessionFactory() as session:
+        await session.execute(
+            update(Product)
+            .where(Product.product_code.in_(["ALF-REPORT-H", "ALF-REPORT-L"]))
+            .values(color="Navy")
+        )
+        await session.execute(
+            update(Product).where(Product.product_code == "ALF-REPORT-E").values(color="Black")
+        )
+        await session.commit()
 
     all_report = await client.get(
         "/api/v1/reports/products?page_size=2&sort_by=name&sort_order=asc",
@@ -130,8 +150,8 @@ async def test_png_export_limit_is_enforced(
 ) -> None:
     from app.core.config import get_settings
 
-    await create_product(name="PNG One", lot_number="PNG-1")
-    await create_product(name="PNG Two", lot_number="PNG-2")
+    await create_product(product_code="ALF-PNG-1", name="PNG One", lot_number="PNG-1")
+    await create_product(product_code="ALF-PNG-2", name="PNG Two", lot_number="PNG-2")
     monkeypatch.setattr(get_settings(), "report_png_max_rows", 1)
     response = await client.get("/api/v1/reports/products/export?format=png", headers=auth_headers)
     assert response.status_code == 422
@@ -195,6 +215,141 @@ async def test_daily_dashboard_report_calculates_in_out_and_adjustments(
     )
     assert exported.status_code == 200
     assert exported.content.startswith(b"PK")
+
+
+@pytest.mark.asyncio
+async def test_daily_report_direction_filter_is_shared_by_preview_and_export(
+    client: httpx.AsyncClient, auth_headers: dict[str, str], create_product
+) -> None:
+    inbound = await create_product(
+        product_code="ALF-DAILY-IN",
+        name="Daily In",
+        lot_number="DAILY-IN",
+        initial_stock="0",
+    )
+    outbound = await create_product(
+        product_code="ALF-DAILY-OUT",
+        name="Daily Out",
+        lot_number="DAILY-OUT",
+        initial_stock="10",
+    )
+    adjustment_in = await create_product(
+        product_code="ALF-DAILY-ADJ-IN",
+        name="Daily Adjustment In",
+        lot_number="DAILY-ADJ-IN",
+        initial_stock="0",
+    )
+    adjustment_out = await create_product(
+        product_code="ALF-DAILY-ADJ-OUT",
+        name="Daily Adjustment Out",
+        lot_number="DAILY-ADJ-OUT",
+        initial_stock="10",
+    )
+    async with AsyncSessionFactory() as session:
+        await session.execute(
+            update(StockTransaction)
+            .where(
+                StockTransaction.product_id.in_([outbound["id"], adjustment_out["id"]]),
+                StockTransaction.transaction_type == StockTransactionType.IN,
+            )
+            .values(created_at=datetime.now(UTC) - timedelta(days=2))
+        )
+        await session.commit()
+    assert (
+        await client.post(
+            f"/api/v1/products/{inbound['id']}/stock/in",
+            json={"quantity": "5", "note": "direction in"},
+            headers=auth_headers,
+        )
+    ).status_code == 201
+    assert (
+        await client.post(
+            f"/api/v1/products/{adjustment_in['id']}/stock/adjust",
+            json={"quantity": "2", "note": "positive direction"},
+            headers=auth_headers,
+        )
+    ).status_code == 201
+    assert (
+        await client.post(
+            f"/api/v1/products/{adjustment_out['id']}/stock/adjust",
+            json={"quantity": "-4", "note": "negative direction"},
+            headers=auth_headers,
+        )
+    ).status_code == 201
+    assert (
+        await client.post(
+            f"/api/v1/products/{outbound['id']}/stock/out",
+            json={"quantity": "4", "note": "direction out"},
+            headers=auth_headers,
+        )
+    ).status_code == 201
+
+    inbound_preview = await client.get(
+        "/api/v1/dashboard/daily?movement_type=in", headers=auth_headers
+    )
+    assert inbound_preview.status_code == 200
+    inbound_data = inbound_preview.json()["data"]
+    assert inbound_data["movement_type"] == "in"
+    assert [item["product_code"] for item in inbound_data["products"]] == [
+        "ALF-DAILY-ADJ-IN",
+        "ALF-DAILY-IN",
+    ]
+    assert Decimal(inbound_data["summary"]["stock_in"]) == Decimal("5")
+    assert Decimal(inbound_data["summary"]["adjustment_in"]) == Decimal("2")
+    assert Decimal(inbound_data["summary"]["stock_out"]) == Decimal("0")
+    assert inbound_data["summary"]["transaction_count"] == 2
+
+    outbound_preview = await client.get(
+        "/api/v1/dashboard/daily?movement_type=out", headers=auth_headers
+    )
+    assert outbound_preview.status_code == 200
+    outbound_data = outbound_preview.json()["data"]
+    assert outbound_data["movement_type"] == "out"
+    assert [item["product_code"] for item in outbound_data["products"]] == [
+        "ALF-DAILY-ADJ-OUT",
+        "ALF-DAILY-OUT",
+    ]
+    assert Decimal(outbound_data["summary"]["stock_in"]) == Decimal("0")
+    assert Decimal(outbound_data["summary"]["stock_out"]) == Decimal("4")
+    assert Decimal(outbound_data["summary"]["adjustment_out"]) == Decimal("4")
+    assert Decimal(outbound_data["summary"]["net_change"]) == Decimal("-8")
+
+    exported = await client.get(
+        "/api/v1/dashboard/daily/export?movement_type=in&format=xlsx",
+        headers=auth_headers,
+    )
+    assert exported.status_code == 200
+    assert exported.content.startswith(b"PK")
+    assert exported.headers["x-report-row-count"] == "2"
+    workbook = load_workbook(BytesIO(exported.content), read_only=True)
+    assert "Hareket türü: Giriş" in workbook.active["A2"].value
+
+
+@pytest.mark.asyncio
+async def test_filtered_daily_png_export_uses_single_a4_landscape_canvas(
+    client: httpx.AsyncClient, auth_headers: dict[str, str], create_product
+) -> None:
+    product = await create_product(
+        product_code="ALF-DAILY-PNG",
+        name="Daily PNG",
+        lot_number="DAILY-PNG",
+        initial_stock="0",
+    )
+    response = await client.post(
+        f"/api/v1/products/{product['id']}/stock/in",
+        json={"quantity": "5", "note": "A4 PNG"},
+        headers=auth_headers,
+    )
+    assert response.status_code == 201
+
+    exported = await client.get(
+        "/api/v1/dashboard/daily/export?movement_type=in&format=png",
+        headers=auth_headers,
+    )
+    assert exported.status_code == 200
+    assert exported.headers["x-report-row-count"] == "1"
+    image = Image.open(BytesIO(exported.content))
+    assert image.size == (1753, 1240)
 
 
 @pytest.mark.asyncio

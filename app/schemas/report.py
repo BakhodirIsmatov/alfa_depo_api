@@ -32,6 +32,12 @@ class ProductStockStatus(StrEnum):
     OUT = "out"
 
 
+class DailyMovementType(StrEnum):
+    ALL = "all"
+    IN = "in"
+    OUT = "out"
+
+
 class ProductReportFilters(BaseModel):
     page: int = Field(default=1, ge=1)
     page_size: int = Field(default=25, ge=1, le=100)
@@ -120,6 +126,7 @@ class DailyStockSummary(BaseModel):
 
 class DailyStockReportResponse(BaseModel):
     report_date: date
+    movement_type: DailyMovementType
     timezone: str
     period_start: datetime
     period_end: datetime

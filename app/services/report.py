@@ -12,6 +12,7 @@ from app.models.stock_transaction import StockTransactionType
 from app.repositories.report import ReportRepository
 from app.schemas.common import PaginationMeta
 from app.schemas.report import (
+    DailyMovementType,
     DailyProductMovement,
     DailyStockReportResponse,
     DailyStockSummary,
@@ -160,17 +161,17 @@ class ReportService:
         brands, colors = await self.repository.filter_options()
         return ProductReportFilterOptions(brands=brands, colors=colors)
 
-    async def daily_stock_report(self, report_date: date | None = None) -> DailyStockReportResponse:
+    async def daily_stock_report(
+        self,
+        report_date: date | None = None,
+        movement_type: DailyMovementType = DailyMovementType.ALL,
+    ) -> DailyStockReportResponse:
         selected_date = report_date or datetime.now(self.timezone).date()
         period_start = datetime.combine(selected_date, time.min, self.timezone)
         period_end = period_start + timedelta(days=1)
         transactions = await self.repository.daily_transactions(period_start, period_end)
 
         products: dict[int, dict] = {}
-        total_in = ZERO
-        total_out = ZERO
-        adjustment_in = ZERO
-        adjustment_out = ZERO
         for transaction, product in transactions:
             item = products.setdefault(
                 product.id,
@@ -191,19 +192,15 @@ class ReportService:
             item["transaction_count"] += 1
             if transaction.transaction_type == StockTransactionType.IN:
                 item["stock_in"] += transaction.quantity
-                total_in += transaction.quantity
             elif transaction.transaction_type == StockTransactionType.OUT:
                 item["stock_out"] += transaction.quantity
-                total_out += transaction.quantity
             else:
                 difference = transaction.new_stock - transaction.previous_stock
                 if difference >= 0:
                     item["adjustment_in"] += difference
-                    adjustment_in += difference
                 else:
                     absolute = abs(difference)
                     item["adjustment_out"] += absolute
-                    adjustment_out += absolute
 
         movements = [
             DailyProductMovement(
@@ -212,10 +209,20 @@ class ReportService:
             )
             for item in products.values()
         ]
+        if movement_type == DailyMovementType.IN:
+            movements = [item for item in movements if item.stock_in + item.adjustment_in > ZERO]
+        elif movement_type == DailyMovementType.OUT:
+            movements = [item for item in movements if item.stock_out + item.adjustment_out > ZERO]
         movements.sort(key=lambda item: (item.product_code, item.product_id))
-        net_change = total_in - total_out + adjustment_in - adjustment_out
+        total_in = sum((item.stock_in for item in movements), start=ZERO)
+        total_out = sum((item.stock_out for item in movements), start=ZERO)
+        adjustment_in = sum((item.adjustment_in for item in movements), start=ZERO)
+        adjustment_out = sum((item.adjustment_out for item in movements), start=ZERO)
+        transaction_count = sum(item.transaction_count for item in movements)
+        net_change = sum((item.net_change for item in movements), start=ZERO)
         return DailyStockReportResponse(
             report_date=selected_date,
+            movement_type=movement_type,
             timezone=self.timezone_name,
             period_start=period_start,
             period_end=period_end,
@@ -226,7 +233,7 @@ class ReportService:
                 adjustment_in=adjustment_in,
                 adjustment_out=adjustment_out,
                 net_change=net_change,
-                transaction_count=len(transactions),
+                transaction_count=transaction_count,
                 affected_products=len(movements),
             ),
             products=movements,

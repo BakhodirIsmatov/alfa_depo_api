@@ -98,6 +98,10 @@ TRANSLATIONS = {
         "transactions": "İşlem",
         "affected": "Etkilenen ürün",
         "normal": "Normal",
+        "movement_type": "Hareket türü",
+        "movement_all": "Tümü",
+        "movement_in": "Giriş",
+        "movement_out": "Çıkış",
     },
     ReportLanguage.ENGLISH: {
         "product_report": "Product Report",
@@ -128,6 +132,10 @@ TRANSLATIONS = {
         "transactions": "Transactions",
         "affected": "Affected products",
         "normal": "Normal",
+        "movement_type": "Movement type",
+        "movement_all": "All",
+        "movement_in": "Stock in",
+        "movement_out": "Stock out",
     },
     ReportLanguage.UZBEK: {
         "product_report": "Mahsulotlar hisoboti",
@@ -158,6 +166,10 @@ TRANSLATIONS = {
         "transactions": "Operatsiyalar",
         "affected": "Ta’sirlangan mahsulot",
         "normal": "Normal",
+        "movement_type": "Harakat turi",
+        "movement_all": "Barchasi",
+        "movement_in": "Kirim",
+        "movement_out": "Chiqim",
     },
 }
 
@@ -239,6 +251,7 @@ def daily_report_document(
     report: DailyStockReportResponse, language: ReportLanguage
 ) -> ReportDocument:
     labels = TRANSLATIONS[language]
+    movement_label = labels[f"movement_{report.movement_type.value}"]
     rows = [
         {
             "code": item.product_code,
@@ -258,6 +271,7 @@ def daily_report_document(
         title=f"ALFATEKS — {labels['daily_report']}",
         subtitle=(
             f"{labels['date']}: {report.report_date.isoformat()} | "
+            f"{labels['movement_type']}: {movement_label} | "
             f"{labels['generated']}: {report.generated_at:%Y-%m-%d %H:%M} | "
             f"TZ: {report.timezone}"
         ),
@@ -483,9 +497,7 @@ def _png(document: ReportDocument) -> bytes:
         + PNG_MARGIN * 2
     )
     if required_height > PNG_PAGE_HEIGHT:
-        raise ValueError(
-            f"PNG export exceeds A4 landscape height with {len(document.rows)} rows"
-        )
+        raise ValueError(f"PNG export exceeds A4 landscape height with {len(document.rows)} rows")
 
     image = Image.new("RGB", (PNG_PAGE_WIDTH, PNG_PAGE_HEIGHT), "white")
     draw = ImageDraw.Draw(image)
@@ -497,7 +509,9 @@ def _png(document: ReportDocument) -> bytes:
     draw.text((PNG_MARGIN, 24), document.title, font=title_font, fill="white")
     draw.text((PNG_MARGIN, 56), document.subtitle, font=subtitle_font, fill="#D8E7E2")
     summary = "  |  ".join(f"{label}: {value}" for label, value in document.summary)
-    draw.text((PNG_MARGIN, PNG_TITLE_HEIGHT + PNG_MARGIN - 4), summary, font=header_font, fill="#334155")
+    draw.text(
+        (PNG_MARGIN, PNG_TITLE_HEIGHT + PNG_MARGIN - 4), summary, font=header_font, fill="#334155"
+    )
 
     table_top = PNG_TITLE_HEIGHT + PNG_SUMMARY_HEIGHT + PNG_MARGIN
     width_total = sum(column.width for column in document.columns)
@@ -534,7 +548,12 @@ def _png(document: ReportDocument) -> bytes:
             )
             x += width
         draw.line(
-            (PNG_MARGIN, y + PNG_TABLE_ROW_HEIGHT, PNG_PAGE_WIDTH - PNG_MARGIN, y + PNG_TABLE_ROW_HEIGHT),
+            (
+                PNG_MARGIN,
+                y + PNG_TABLE_ROW_HEIGHT,
+                PNG_PAGE_WIDTH - PNG_MARGIN,
+                y + PNG_TABLE_ROW_HEIGHT,
+            ),
             fill="#CBD5E1",
         )
     output = BytesIO()
