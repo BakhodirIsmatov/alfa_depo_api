@@ -475,6 +475,7 @@ async def test_daily_report_direction_filter_is_shared_by_preview_and_export(
         name="Daily Out",
         lot_number="DAILY-OUT",
         initial_stock="10",
+        count=10,
     )
     adjustment_in = await create_product(
         product_code="ALF-DAILY-ADJ-IN",
