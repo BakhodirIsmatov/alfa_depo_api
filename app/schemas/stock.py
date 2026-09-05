@@ -8,18 +8,18 @@ from app.models.stock_transaction import StockTransactionType
 
 class StockChangeRequest(BaseModel):
     quantity: Decimal = Field(gt=0, max_digits=14, decimal_places=3)
-    count: int = Field(gt=0)
+    count: int | None = Field(default=None, gt=0)
     note: str | None = Field(default=None, max_length=500)
 
 
 class StockAdjustmentRequest(BaseModel):
     quantity: Decimal = Field(max_digits=14, decimal_places=3)
-    count: int
+    count: int | None = None
     note: str | None = Field(default=None, max_length=500)
 
     @field_validator("count")
     @classmethod
-    def validate_nonzero_count(cls, value: int) -> int:
+    def validate_nonzero_count(cls, value: int | None) -> int | None:
         if value == 0:
             raise ValueError("count must not be zero")
         return value

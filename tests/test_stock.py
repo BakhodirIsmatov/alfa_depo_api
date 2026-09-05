@@ -94,8 +94,10 @@ async def test_stock_quantity_and_count_validation(
         json={"quantity": 1},
         headers=auth_headers,
     )
-    assert missing_count.status_code == 422
-    assert missing_count.json()["error"]["code"] == "VALIDATION_ERROR"
+    assert missing_count.status_code == 201
+    assert missing_count.json()["data"]["count"] is None
+    assert missing_count.json()["data"]["previous_count"] is None
+    assert missing_count.json()["data"]["new_count"] is None
 
     zero_count = await client.post(
         f"/api/v1/products/{product['id']}/stock/in",
@@ -104,6 +106,27 @@ async def test_stock_quantity_and_count_validation(
     )
     assert zero_count.status_code == 422
     assert zero_count.json()["error"]["code"] == "VALIDATION_ERROR"
+
+
+@pytest.mark.asyncio
+async def test_stock_without_count_preserves_existing_product_count(
+    client: httpx.AsyncClient, auth_headers: dict[str, str], create_product
+) -> None:
+    product = await create_product(initial_stock="10.000", count=2)
+    response = await client.post(
+        f"/api/v1/products/{product['id']}/stock/out",
+        json={"quantity": "1.000"},
+        headers=auth_headers,
+    )
+
+    assert response.status_code == 201
+    assert response.json()["data"]["count"] is None
+    assert response.json()["data"]["previous_count"] == 2
+    assert response.json()["data"]["new_count"] == 2
+
+    stock = await client.get(f"/api/v1/products/{product['id']}/stock", headers=auth_headers)
+    assert stock.json()["data"]["count"] == 2
+    assert Decimal(stock.json()["data"]["current_stock"]) == Decimal("9.000")
 
 
 @pytest.mark.asyncio

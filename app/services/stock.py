@@ -48,7 +48,7 @@ class StockService:
         product_id: int,
         transaction_type: StockTransactionType,
         value,
-        count: int,
+        count: int | None,
         note: str | None,
         actor: User,
         request: Request,
@@ -56,33 +56,38 @@ class StockService:
         product = await self._get_product(product_id, for_update=True)
         previous = product.current_stock
         previous_count = product.count
-        current_count = previous_count or 0
         if transaction_type == StockTransactionType.IN:
             new_stock = previous + value
-            new_count = current_count + count
             quantity = value
         elif transaction_type == StockTransactionType.OUT:
             new_stock = previous - value
-            new_count = current_count - count
             quantity = value
         else:
             new_stock = previous + value
-            new_count = current_count + count
             quantity = value
+        new_count = previous_count
+        if count is not None:
+            current_count = previous_count or 0
+            new_count = (
+                current_count - count
+                if transaction_type == StockTransactionType.OUT
+                else current_count + count
+            )
         if new_stock < 0 and not get_settings().allow_negative_stock:
             raise AppError(
                 "INSUFFICIENT_STOCK",
                 "Stock operation would make current stock negative",
                 409,
             )
-        if new_count < 0:
+        if new_count is not None and new_count < 0:
             raise AppError(
                 "INSUFFICIENT_PRODUCT_COUNT",
                 "Stock operation would make product count negative",
                 409,
             )
         product.current_stock = new_stock
-        product.count = new_count
+        if count is not None:
+            product.count = new_count
         product.updated_by = actor.id
         transaction = StockTransaction(
             product_id=product.id,
