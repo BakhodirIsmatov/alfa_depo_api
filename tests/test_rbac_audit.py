@@ -83,7 +83,11 @@ async def test_role_permission_matrix_and_live_reporter_toggle(
     assert (await client.get("/api/v1/dashboard", headers=manager_headers)).status_code == 200
     assert (await client.get("/api/v1/users", headers=manager_headers)).status_code == 403
 
-    created = await client.post("/api/v1/products", json=product_payload, headers=manager_headers)
+    created = await client.post(
+        "/api/v1/products",
+        json={**product_payload, "count": 10},
+        headers=manager_headers,
+    )
     assert created.status_code == 201
     product_id = created.json()["data"]["id"]
 
@@ -91,7 +95,7 @@ async def test_role_permission_matrix_and_live_reporter_toggle(
     assert (
         await client.post(
             f"/api/v1/products/{product_id}/stock/out",
-            json={"quantity": "1"},
+            json={"quantity": "1", "count": 1},
             headers=user_headers,
         )
     ).status_code == 201
@@ -99,8 +103,16 @@ async def test_role_permission_matrix_and_live_reporter_toggle(
         ("get", "/api/v1/dashboard", None),
         ("get", "/api/v1/reports/products", None),
         ("get", f"/api/v1/products/{product_id}/stock/history", None),
-        ("post", f"/api/v1/products/{product_id}/stock/in", {"quantity": "1"}),
-        ("post", f"/api/v1/products/{product_id}/stock/adjust", {"quantity": "2"}),
+        (
+            "post",
+            f"/api/v1/products/{product_id}/stock/in",
+            {"quantity": "1", "count": 1},
+        ),
+        (
+            "post",
+            f"/api/v1/products/{product_id}/stock/adjust",
+            {"quantity": "2", "count": 1},
+        ),
     ]
     for method, path, payload in forbidden:
         response = await client.request(method, path, json=payload, headers=user_headers)

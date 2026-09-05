@@ -26,6 +26,8 @@ from app.services.report_export import daily_report_document, export_document
 
 router = APIRouter(prefix="/dashboard", tags=["Dashboard"])
 ReportDateDep = Annotated[date | None, Query(alias="date")]
+ReportDateFromDep = Annotated[date | None, Query(alias="date_from")]
+ReportDateToDep = Annotated[date | None, Query(alias="date_to")]
 ReportFormatDep = Annotated[ReportFormat, Query()]
 ReportLanguageDep = Annotated[ReportLanguage, Query()]
 DailyMovementTypeDep = Annotated[DailyMovementType, Query()]
@@ -56,7 +58,8 @@ async def dashboard(
     summary="Get daily stock movement report",
     description=(
         "Return stock in, stock out, positive/negative adjustments, net warehouse change, "
-        "and per-product opening/closing stock for one reporting-timezone calendar day. "
+        "and per-product opening/closing stock for an inclusive reporting-timezone date range. "
+        "Use date_from/date_to for a range; legacy date remains available for one day. "
         "Use movement_type to show all products or only products with inbound/outbound movement."
     ),
 )
@@ -65,9 +68,16 @@ async def daily_dashboard_report(
     user: ReportsView,
     session: SessionDep,
     report_date: ReportDateDep = None,
+    date_from: ReportDateFromDep = None,
+    date_to: ReportDateToDep = None,
     movement_type: DailyMovementTypeDep = DailyMovementType.ALL,
 ) -> SuccessResponse[DailyStockReportResponse]:
-    data = await ReportService(session).daily_stock_report(report_date, movement_type)
+    data = await ReportService(session).daily_stock_report(
+        report_date,
+        movement_type,
+        date_from=date_from,
+        date_to=date_to,
+    )
     await AuditService(session).record_read(
         request,
         user,
@@ -75,6 +85,8 @@ async def daily_dashboard_report(
         action="DAILY_STOCK_REPORT_VIEWED",
         metadata={
             "report_date": data.report_date,
+            "report_date_from": data.report_date_from,
+            "report_date_to": data.report_date_to,
             "movement_type": movement_type,
             "result_count": len(data.products),
         },
@@ -87,8 +99,8 @@ async def daily_dashboard_report(
     response_class=Response,
     summary="Export daily stock movement report",
     description=(
-        "Generate the selected and movement-filtered daily stock report as PDF, PNG, or "
-        "Excel XLSX. PNG output is limited to a single A4 landscape canvas."
+        "Generate the selected date-range and movement-filtered stock report as PDF, PNG, "
+        "or Excel XLSX. PNG width is content-aware and limited to 297 mm."
     ),
 )
 async def export_daily_dashboard_report(
@@ -96,11 +108,18 @@ async def export_daily_dashboard_report(
     user: ReportsExport,
     session: SessionDep,
     report_date: ReportDateDep = None,
+    date_from: ReportDateFromDep = None,
+    date_to: ReportDateToDep = None,
     movement_type: DailyMovementTypeDep = DailyMovementType.ALL,
     format: ReportFormatDep = ReportFormat.PDF,
     language: ReportLanguageDep = ReportLanguage.TURKISH,
 ) -> Response:
-    report = await ReportService(session).daily_stock_report(report_date, movement_type)
+    report = await ReportService(session).daily_stock_report(
+        report_date,
+        movement_type,
+        date_from=date_from,
+        date_to=date_to,
+    )
     settings = get_settings()
     maximum_rows = (
         settings.report_png_max_rows
@@ -125,6 +144,8 @@ async def export_daily_dashboard_report(
         action="DAILY_STOCK_REPORT_EXPORTED",
         metadata={
             "report_date": report.report_date,
+            "report_date_from": report.report_date_from,
+            "report_date_to": report.report_date_to,
             "movement_type": movement_type,
             "format": format.normalized,
             "language": language,

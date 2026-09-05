@@ -55,7 +55,13 @@ async def _change_stock(
     request: Request,
 ) -> SuccessResponse[StockTransactionResponse]:
     transaction = await StockService(session).change(
-        product_id, transaction_type, payload.quantity, payload.note, user, request
+        product_id,
+        transaction_type,
+        payload.quantity,
+        payload.count,
+        payload.note,
+        user,
+        request,
     )
     return SuccessResponse(data=StockTransactionResponse.model_validate(transaction))
 
@@ -114,6 +120,7 @@ async def adjust_stock(
         product_id,
         StockTransactionType.ADJUSTMENT,
         payload.quantity,
+        payload.count,
         payload.note,
         user,
         request,

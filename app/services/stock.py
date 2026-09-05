@@ -33,6 +33,7 @@ class StockService:
             product_id=product.id,
             product_code=product.product_code,
             current_stock=product.current_stock,
+            count=product.count,
             minimum_stock=product.minimum_stock,
             unit=product.unit,
             is_low_stock=product.current_stock <= product.minimum_stock,
@@ -47,20 +48,26 @@ class StockService:
         product_id: int,
         transaction_type: StockTransactionType,
         value,
+        count: int,
         note: str | None,
         actor: User,
         request: Request,
     ) -> StockTransaction:
         product = await self._get_product(product_id, for_update=True)
         previous = product.current_stock
+        previous_count = product.count
+        current_count = previous_count or 0
         if transaction_type == StockTransactionType.IN:
             new_stock = previous + value
+            new_count = current_count + count
             quantity = value
         elif transaction_type == StockTransactionType.OUT:
             new_stock = previous - value
+            new_count = current_count - count
             quantity = value
         else:
             new_stock = previous + value
+            new_count = current_count + count
             quantity = value
         if new_stock < 0 and not get_settings().allow_negative_stock:
             raise AppError(
@@ -68,7 +75,14 @@ class StockService:
                 "Stock operation would make current stock negative",
                 409,
             )
+        if new_count < 0:
+            raise AppError(
+                "INSUFFICIENT_PRODUCT_COUNT",
+                "Stock operation would make product count negative",
+                409,
+            )
         product.current_stock = new_stock
+        product.count = new_count
         product.updated_by = actor.id
         transaction = StockTransaction(
             product_id=product.id,
@@ -76,6 +90,9 @@ class StockService:
             quantity=quantity,
             previous_stock=previous,
             new_stock=new_stock,
+            count=count,
+            previous_count=previous_count,
+            new_count=new_count,
             note=note,
             created_by=actor.id,
             actor_username=actor.username,
@@ -106,6 +123,9 @@ class StockService:
                 "unit": product.unit,
                 "previous_stock": previous,
                 "new_stock": new_stock,
+                "count": count,
+                "previous_count": previous_count,
+                "new_count": new_count,
                 "note": note,
                 "transaction_id": transaction.id,
             },

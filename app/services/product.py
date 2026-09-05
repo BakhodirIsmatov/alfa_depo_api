@@ -25,6 +25,7 @@ _AUDIT_FIELDS = (
     "image_url",
     "minimum_stock",
     "current_stock",
+    "count",
 )
 
 
@@ -104,6 +105,9 @@ class ProductService:
                     quantity=payload.initial_stock,
                     previous_stock=0,
                     new_stock=payload.initial_stock,
+                    count=payload.count if payload.count and payload.count > 0 else None,
+                    previous_count=0 if payload.count is not None else None,
+                    new_count=payload.count,
                     note="Initial stock",
                     created_by=actor.id,
                     actor_username=actor.username,
@@ -128,6 +132,9 @@ class ProductService:
                         "unit": product.unit,
                         "previous_stock": 0,
                         "new_stock": payload.initial_stock,
+                        "count": initial_transaction.count,
+                        "previous_count": initial_transaction.previous_count,
+                        "new_count": initial_transaction.new_count,
                         "note": initial_transaction.note,
                         "transaction_id": initial_transaction.id,
                     },

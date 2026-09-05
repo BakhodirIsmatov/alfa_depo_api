@@ -3,7 +3,7 @@ from decimal import Decimal
 from enum import StrEnum
 from typing import TYPE_CHECKING
 
-from sqlalchemy import DateTime, Enum, ForeignKey, Numeric, String, func
+from sqlalchemy import CheckConstraint, DateTime, Enum, ForeignKey, Integer, Numeric, String, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
@@ -21,6 +21,17 @@ class StockTransactionType(StrEnum):
 
 class StockTransaction(Base):
     __tablename__ = "stock_transactions"
+    __table_args__ = (
+        CheckConstraint("count IS NULL OR count != 0", name="stock_count_nonzero"),
+        CheckConstraint(
+            "previous_count IS NULL OR previous_count >= 0",
+            name="stock_previous_count_nonnegative",
+        ),
+        CheckConstraint(
+            "new_count IS NULL OR new_count >= 0",
+            name="stock_new_count_nonnegative",
+        ),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True)
     product_id: Mapped[int] = mapped_column(
@@ -32,6 +43,9 @@ class StockTransaction(Base):
     quantity: Mapped[Decimal] = mapped_column(Numeric(14, 3))
     previous_stock: Mapped[Decimal] = mapped_column(Numeric(14, 3))
     new_stock: Mapped[Decimal] = mapped_column(Numeric(14, 3))
+    count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    previous_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    new_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
     note: Mapped[str | None] = mapped_column(String(500))
     created_by: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"))
     actor_username: Mapped[str] = mapped_column(String(50))

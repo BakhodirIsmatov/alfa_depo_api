@@ -72,6 +72,7 @@ class ProductReportItem(BaseModel):
     color_code: str | None
     lot_number: str
     current_stock: Decimal
+    count: int | None
     minimum_stock: Decimal
     unit: Literal["kg"]
     stock_status: Literal["normal", "low", "out"]
@@ -125,7 +126,10 @@ class DailyStockSummary(BaseModel):
 
 
 class DailyStockReportResponse(BaseModel):
+    # Kept for clients that still consume the former single-day field.
     report_date: date
+    report_date_from: date
+    report_date_to: date
     movement_type: DailyMovementType
     timezone: str
     period_start: datetime

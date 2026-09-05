@@ -31,30 +31,29 @@ from app.schemas.report import (
     ReportLanguage,
 )
 
-A4_LANDSCAPE_WIDTH_MM, A4_LANDSCAPE_HEIGHT_MM = 297, 210
-PNG_DPI = 150
+A4_LANDSCAPE_WIDTH_MM = 297
+PNG_DPI = 300
 MM_PER_INCH = 25.4
-PNG_PAGE_WIDTH = int(A4_LANDSCAPE_WIDTH_MM / MM_PER_INCH * PNG_DPI)
-PNG_PAGE_HEIGHT = int(A4_LANDSCAPE_HEIGHT_MM / MM_PER_INCH * PNG_DPI)
-PNG_MARGIN = 32
+PNG_MAX_WIDTH = int(A4_LANDSCAPE_WIDTH_MM / MM_PER_INCH * PNG_DPI)
 TABLE_MIN_WIDTH_RATIO = 0.82
-PNG_HEADER_MIN_HEIGHT = 88
-PNG_HEADER_HORIZONTAL_PADDING = 20
-PNG_HEADER_VERTICAL_PADDING = 14
-PNG_HEADER_TEXT_GAP = 6
-PNG_SUMMARY_TOP_PADDING = 18
-PNG_SUMMARY_BOTTOM_PADDING = 16
-PNG_TABLE_HEADER_MIN_HEIGHT = 38
-PNG_TABLE_ROW_MIN_HEIGHT = 30
-PNG_TABLE_BOTTOM_PADDING = 32
-PNG_CELL_HORIZONTAL_PADDING = 9
-PNG_CELL_VERTICAL_PADDING = 6
-PNG_MIN_COLUMN_WIDTH = 48
-PNG_MAX_UNBROKEN_WIDTH = 120
-PNG_TITLE_LINE_HEIGHT = 36
-PNG_SUBTITLE_LINE_HEIGHT = 20
-PNG_TABLE_HEADER_LINE_HEIGHT = 17
-PNG_TABLE_BODY_LINE_HEIGHT = 17
+PNG_HEADER_MIN_HEIGHT = 176
+PNG_HEADER_HORIZONTAL_PADDING = 40
+PNG_HEADER_VERTICAL_PADDING = 28
+PNG_HEADER_TEXT_GAP = 12
+PNG_SUMMARY_TOP_PADDING = 36
+PNG_SUMMARY_BOTTOM_PADDING = 32
+PNG_TABLE_HEADER_MIN_HEIGHT = 76
+PNG_TABLE_ROW_MIN_HEIGHT = 60
+PNG_CELL_HORIZONTAL_PADDING = 18
+PNG_CELL_VERTICAL_PADDING = 12
+PNG_MIN_COLUMN_WIDTH = 96
+PNG_MAX_UNBROKEN_WIDTH = 240
+PNG_TITLE_LINE_HEIGHT = 72
+PNG_SUBTITLE_LINE_HEIGHT = 40
+PNG_TABLE_HEADER_LINE_HEIGHT = 38
+PNG_TABLE_BODY_LINE_HEIGHT = 38
+PNG_ACCENT_HEIGHT = 6
+PNG_GRID_LINE_WIDTH = 2
 
 
 @dataclass(frozen=True)
@@ -92,6 +91,7 @@ TRANSLATIONS = {
         "color": "Renk",
         "lot": "Lot",
         "current": "Mevcut (kg)",
+        "count": "Ürün sayısı",
         "status": "Durum",
         "created": "Oluşturuldu",
         "total_products": "Toplam ürün",
@@ -99,6 +99,7 @@ TRANSLATIONS = {
         "low": "Düşük stok",
         "out": "Stokta yok",
         "date": "Tarih",
+        "date_range": "Tarih aralığı",
         "opening": "Başlangıç (kg)",
         "closing": "Kapanış (kg)",
         "stock_in": "Giriş (kg)",
@@ -124,6 +125,7 @@ TRANSLATIONS = {
         "color": "Color",
         "lot": "Lot",
         "current": "Current (kg)",
+        "count": "Product count",
         "status": "Status",
         "created": "Created",
         "total_products": "Total products",
@@ -131,6 +133,7 @@ TRANSLATIONS = {
         "low": "Low stock",
         "out": "Out of stock",
         "date": "Date",
+        "date_range": "Date range",
         "opening": "Opening (kg)",
         "closing": "Closing (kg)",
         "stock_in": "Stock in (kg)",
@@ -156,6 +159,7 @@ TRANSLATIONS = {
         "color": "Rang",
         "lot": "Lot",
         "current": "Mavjud (kg)",
+        "count": "Mahsulot soni",
         "status": "Holat",
         "created": "Yaratilgan",
         "total_products": "Jami mahsulot",
@@ -163,6 +167,7 @@ TRANSLATIONS = {
         "low": "Kam qolgan",
         "out": "Tugagan",
         "date": "Sana",
+        "date_range": "Sana oralig‘i",
         "opening": "Boshlang‘ich (kg)",
         "closing": "Yakuniy (kg)",
         "stock_in": "Kirim (kg)",
@@ -222,6 +227,7 @@ def product_report_document(
             "color": item.color or "—",
             "lot": item.lot_number,
             "current": _decimal(item.current_stock),
+            "count": str(item.count) if item.count is not None else "-",
             "status": _status(item.stock_status, labels),
             "created": item.created_at.strftime("%Y-%m-%d"),
         }
@@ -237,6 +243,7 @@ def product_report_document(
             ExportColumn("color", labels["color"], 14),
             ExportColumn("lot", labels["lot"], 18),
             ExportColumn("current", labels["current"], 14),
+            ExportColumn("count", labels["count"], 13),
             ExportColumn("status", labels["status"], 14),
             ExportColumn("created", labels["created"], 14),
         ],
@@ -256,6 +263,11 @@ def daily_report_document(
 ) -> ReportDocument:
     labels = TRANSLATIONS[language]
     movement_label = labels[f"movement_{report.movement_type.value}"]
+    date_value = (
+        report.report_date_from.isoformat()
+        if report.report_date_from == report.report_date_to
+        else f"{report.report_date_from.isoformat()} – {report.report_date_to.isoformat()}"
+    )
     rows = [
         {
             "code": item.product_code,
@@ -274,7 +286,7 @@ def daily_report_document(
     return ReportDocument(
         title=f"ALFATEKS — {labels['daily_report']}",
         subtitle=(
-            f"{labels['date']}: {report.report_date.isoformat()} | "
+            f"{labels['date_range']}: {date_value} | "
             f"{labels['movement_type']}: {movement_label} | "
             f"{labels['generated']}: {report.generated_at:%Y-%m-%d %H:%M} | "
             f"TZ: {report.timezone}"
@@ -301,7 +313,11 @@ def daily_report_document(
             (labels["transactions"], report.summary.transaction_count),
             (labels["affected"], report.summary.affected_products),
         ],
-        filename=f"alfateks-daily-stock-{report.report_date:%Y%m%d}",
+        filename=(
+            f"alfateks-daily-stock-{report.report_date_from:%Y%m%d}"
+            if report.report_date_from == report.report_date_to
+            else (f"alfateks-stock-{report.report_date_from:%Y%m%d}-{report.report_date_to:%Y%m%d}")
+        ),
     )
 
 
@@ -415,7 +431,7 @@ def _pdf(document: ReportDocument) -> bytes:
 
 
 def _excel_safe(value: Any) -> Any:
-    if isinstance(value, str) and value.startswith(("=", "+", "-", "@")):
+    if isinstance(value, str) and value != "-" and value.startswith(("=", "+", "-", "@")):
         return f"'{value}"
     return value
 
@@ -484,7 +500,9 @@ def _xlsx(document: ReportDocument) -> bytes:
 
 
 def _load_png_font(size: int, *, bold: bool = False):
+    bundled_fonts = Path(reportlab.__file__).resolve().parent / "fonts"
     candidates = (
+        str(bundled_fonts / ("VeraBd.ttf" if bold else "Vera.ttf")),
         (
             "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
             if bold
@@ -520,8 +538,7 @@ def _fit_widths(preferred: list[float], minimum: list[float], available: float) 
         for preferred_width, minimum_width in zip(preferred, minimum, strict=True)
     )
     return [
-        minimum_width
-        + (preferred_width - minimum_width) * available_slack / preferred_slack
+        minimum_width + (preferred_width - minimum_width) * available_slack / preferred_slack
         for preferred_width, minimum_width in zip(preferred, minimum, strict=True)
     ]
 
@@ -534,8 +551,7 @@ def _expand_widths(widths: list[float], target: float, weights: list[float]) -> 
     weight_total = sum(weights)
     extra = target - current
     return [
-        width + extra * weight / weight_total
-        for width, weight in zip(widths, weights, strict=True)
+        width + extra * weight / weight_total for width, weight in zip(widths, weights, strict=True)
     ]
 
 
@@ -668,11 +684,6 @@ def _png_column_widths(
         )
 
     fitted = _fit_widths(preferred, minimum, float(available_width))
-    fitted = _expand_widths(
-        fitted,
-        available_width * TABLE_MIN_WIDTH_RATIO,
-        [float(column.width) for column in document.columns],
-    )
     widths = [max(1, round(width)) for width in fitted]
     overflow = sum(widths) - available_width
     for index in range(len(widths) - 1, -1, -1):
@@ -704,18 +715,17 @@ def _draw_text_lines(
 
 
 def _png(document: ReportDocument) -> bytes:
-    image = Image.new("RGB", (PNG_PAGE_WIDTH, PNG_PAGE_HEIGHT), "white")
-    draw = ImageDraw.Draw(image)
-    title_font = _load_png_font(30, bold=True)
-    subtitle_font = _load_png_font(14)
-    header_font = _load_png_font(13, bold=True)
-    body_font = _load_png_font(13)
+    measurement_image = Image.new("RGB", (1, 1), "white")
+    draw = ImageDraw.Draw(measurement_image)
+    title_font = _load_png_font(60, bold=True)
+    subtitle_font = _load_png_font(28)
+    header_font = _load_png_font(30, bold=True)
+    body_font = _load_png_font(30)
 
-    available_width = PNG_PAGE_WIDTH - PNG_MARGIN * 2
-    widths = _png_column_widths(draw, document, header_font, body_font, available_width)
+    widths = _png_column_widths(draw, document, header_font, body_font, PNG_MAX_WIDTH)
     table_width = sum(widths)
-    table_left = (PNG_PAGE_WIDTH - table_width) // 2
-    table_right = table_left + table_width
+    table_left = 0
+    table_right = table_width - 1
 
     header_text_width = table_width - PNG_HEADER_HORIZONTAL_PADDING * 2
     title_lines = _wrap_text(draw, document.title, title_font, header_text_width)
@@ -775,20 +785,24 @@ def _png(document: ReportDocument) -> bytes:
             )
         )
 
-    table_top = PNG_MARGIN + report_header_height + summary_height
+    table_top = report_header_height + summary_height
     table_bottom = table_top + table_header_height + sum(row_heights)
-    required_height = table_bottom + PNG_TABLE_BOTTOM_PADDING
-    if required_height > PNG_PAGE_HEIGHT:
-        raise ValueError(f"PNG export exceeds A4 landscape height with {len(document.rows)} rows")
+    image = Image.new("RGB", (table_width, table_bottom), "white")
+    draw = ImageDraw.Draw(image)
 
-    report_header_top = PNG_MARGIN
+    report_header_top = 0
     report_header_bottom = report_header_top + report_header_height
     draw.rectangle(
         (table_left, report_header_top, table_right, report_header_bottom - 1),
         fill="#16332A",
     )
     draw.rectangle(
-        (table_left, report_header_bottom - 3, table_right, report_header_bottom - 1),
+        (
+            table_left,
+            report_header_bottom - PNG_ACCENT_HEIGHT,
+            table_right,
+            report_header_bottom - 1,
+        ),
         fill="#2F9E7D",
     )
     title_top = report_header_top + PNG_HEADER_VERTICAL_PADDING
@@ -825,7 +839,7 @@ def _png(document: ReportDocument) -> bytes:
     )
 
     draw.rectangle(
-        (table_left, table_top, table_right, table_top + table_header_height),
+        (table_left, table_top, table_right, table_top + table_header_height - 1),
         fill="#176B54",
     )
     x = table_left
@@ -842,12 +856,10 @@ def _png(document: ReportDocument) -> bytes:
         x += width
 
     y = table_top + table_header_height
-    for row_index, (cells, row_height) in enumerate(
-        zip(row_cells, row_heights, strict=True)
-    ):
+    for row_index, (cells, row_height) in enumerate(zip(row_cells, row_heights, strict=True)):
         if row_index % 2:
             draw.rectangle(
-                (table_left, y, table_right, y + row_height),
+                (table_left, y, table_right, y + row_height - 1),
                 fill="#F1F5F9",
             )
         x = table_left
@@ -863,16 +875,30 @@ def _png(document: ReportDocument) -> bytes:
             )
             x += width
         draw.line(
-            (table_left, y + row_height, table_right, y + row_height),
+            (table_left, y + row_height - 1, table_right, y + row_height - 1),
             fill="#CBD5E1",
+            width=PNG_GRID_LINE_WIDTH,
         )
         y += row_height
 
     x = table_left
     for width in widths[:-1]:
         x += width
-        draw.line((x, table_top, x, table_bottom), fill="#CBD5E1")
-    draw.rectangle((table_left, table_top, table_right, table_bottom), outline="#B8C5D1", width=1)
+        draw.line(
+            (x, table_top, x, table_bottom - 1),
+            fill="#CBD5E1",
+            width=PNG_GRID_LINE_WIDTH,
+        )
+    draw.rectangle(
+        (table_left, table_top, table_right, table_bottom - 1),
+        outline="#B8C5D1",
+        width=PNG_GRID_LINE_WIDTH,
+    )
     output = BytesIO()
-    image.save(output, format="PNG", optimize=True)
+    image.save(
+        output,
+        format="PNG",
+        optimize=True,
+        dpi=(PNG_DPI, PNG_DPI),
+    )
     return output.getvalue()

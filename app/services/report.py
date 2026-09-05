@@ -93,6 +93,7 @@ class ReportService:
             color_code=product.color_code,
             lot_number=product.lot_number,
             current_stock=product.current_stock,
+            count=product.count,
             minimum_stock=product.minimum_stock,
             unit="kg",
             stock_status=self._stock_status(product),
@@ -165,10 +166,37 @@ class ReportService:
         self,
         report_date: date | None = None,
         movement_type: DailyMovementType = DailyMovementType.ALL,
+        *,
+        date_from: date | None = None,
+        date_to: date | None = None,
     ) -> DailyStockReportResponse:
-        selected_date = report_date or datetime.now(self.timezone).date()
-        period_start = datetime.combine(selected_date, time.min, self.timezone)
-        period_end = period_start + timedelta(days=1)
+        if report_date is not None and (date_from is not None or date_to is not None):
+            raise AppError(
+                "INVALID_REPORT_FILTERS",
+                "Legacy date cannot be combined with date_from or date_to",
+                422,
+            )
+        today = datetime.now(self.timezone).date()
+        if report_date is not None:
+            selected_from = selected_to = report_date
+        elif date_from is not None or date_to is not None:
+            selected_from = date_from or date_to
+            selected_to = date_to or date_from
+        else:
+            selected_from = selected_to = today
+        assert selected_from is not None and selected_to is not None
+        if selected_from > selected_to:
+            raise AppError(
+                "INVALID_REPORT_FILTERS",
+                "Date-from cannot be after date-to",
+                422,
+            )
+        period_start = datetime.combine(selected_from, time.min, self.timezone)
+        period_end = datetime.combine(
+            selected_to + timedelta(days=1),
+            time.min,
+            self.timezone,
+        )
         transactions = await self.repository.daily_transactions(period_start, period_end)
 
         products: dict[int, dict] = {}
@@ -221,7 +249,9 @@ class ReportService:
         transaction_count = sum(item.transaction_count for item in movements)
         net_change = sum((item.net_change for item in movements), start=ZERO)
         return DailyStockReportResponse(
-            report_date=selected_date,
+            report_date=selected_from,
+            report_date_from=selected_from,
+            report_date_to=selected_to,
             movement_type=movement_type,
             timezone=self.timezone_name,
             period_start=period_start,

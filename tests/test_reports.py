@@ -2,6 +2,7 @@ from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from io import BytesIO
+from zoneinfo import ZoneInfo
 
 import httpx
 import pytest
@@ -27,6 +28,7 @@ async def test_product_report_filters_summary_and_options(
         color="Navy",
         initial_stock="50",
         minimum_stock="10",
+        count=24,
     )
     await create_product(
         product_code="ALF-REPORT-L",
@@ -73,6 +75,8 @@ async def test_product_report_filters_summary_and_options(
     assert Decimal(data["summary"]["total_current_stock"]) == Decimal("55")
     assert data["summary"]["low_stock_products"] == 2
     assert data["summary"]["out_of_stock_products"] == 1
+    counts_by_code = {item["product_code"]: item["count"] for item in data["items"]}
+    assert counts_by_code == {"ALF-REPORT-E": None, "ALF-REPORT-H": 24}
 
     low_report = await client.get(
         "/api/v1/reports/products?brand=Report%20Brand%20A&stock_status=low",
@@ -144,6 +148,29 @@ async def test_product_report_exports_real_files(
 
 
 @pytest.mark.asyncio
+async def test_product_report_xlsx_renders_nullable_count_as_dash(
+    client: httpx.AsyncClient,
+    auth_headers: dict[str, str],
+    create_product,
+) -> None:
+    await create_product(
+        product_code="ALF-COUNT-NULL",
+        name="Count Null",
+        lot_number="COUNT-NULL",
+    )
+    response = await client.get(
+        "/api/v1/reports/products/export?format=xlsx&language=en",
+        headers=auth_headers,
+    )
+    assert response.status_code == 200
+    workbook = load_workbook(BytesIO(response.content), read_only=True)
+    sheet = workbook.active
+    headers = [cell.value for cell in sheet[6]]
+    count_column = headers.index("Product count") + 1
+    assert sheet.cell(7, count_column).value == "-"
+
+
+@pytest.mark.asyncio
 async def test_png_export_limit_is_enforced(
     client: httpx.AsyncClient,
     auth_headers: dict[str, str],
@@ -161,7 +188,7 @@ async def test_png_export_limit_is_enforced(
 
 
 @pytest.mark.asyncio
-async def test_png_export_uses_a4_landscape_canvas(
+async def test_png_export_uses_dynamic_300_dpi_canvas_with_a4_max_width(
     client: httpx.AsyncClient,
     auth_headers: dict[str, str],
     create_product,
@@ -171,7 +198,10 @@ async def test_png_export_uses_a4_landscape_canvas(
     assert response.status_code == 200
     image = Image.open(BytesIO(response.content))
     assert image.width > image.height
-    assert image.size == (1753, 1240)
+    assert image.width < report_export.PNG_MAX_WIDTH
+    assert image.info["dpi"] == pytest.approx((300, 300), abs=0.1)
+    bottom_row = image.convert("RGB").crop((0, image.height - 1, image.width, image.height))
+    assert bottom_row.getextrema() != ((255, 255), (255, 255), (255, 255))
 
 
 @pytest.mark.asyncio
@@ -200,10 +230,9 @@ async def test_export_layout_compacts_columns_and_balances_png_header(
         + report_export.PNG_HEADER_TEXT_GAP
         + report_export.PNG_SUBTITLE_LINE_HEIGHT,
     )
-    accent_y = report_export.PNG_MARGIN + report_header_height - 2
+    accent_y = report_header_height - 2
     table_y = (
-        report_export.PNG_MARGIN
-        + report_header_height
+        report_header_height
         + report_export.PNG_SUMMARY_TOP_PADDING
         + report_export.PNG_TABLE_BODY_LINE_HEIGHT
         + report_export.PNG_SUMMARY_BOTTOM_PADDING
@@ -211,11 +240,9 @@ async def test_export_layout_compacts_columns_and_balances_png_header(
     )
     accent_x = [x for x in range(image.width) if image.getpixel((x, accent_y)) == (47, 158, 125)]
     table_x = [x for x in range(image.width) if image.getpixel((x, table_y)) != (255, 255, 255)]
-    assert (min(accent_x), max(accent_x)) == (min(table_x), max(table_x))
-    assert min(table_x) == image.width - 1 - max(table_x)
-    assert len(table_x) >= (
-        image.width - report_export.PNG_MARGIN * 2
-    ) * report_export.TABLE_MIN_WIDTH_RATIO
+    assert (min(accent_x), max(accent_x)) == (0, image.width - 1)
+    assert (min(table_x), max(table_x)) == (0, image.width - 1)
+    assert image.width < report_export.PNG_MAX_WIDTH
 
     xlsx_response = await client.get(
         "/api/v1/reports/products/export?format=xlsx&language=uz",
@@ -239,6 +266,45 @@ def test_png_text_wrap_preserves_long_values() -> None:
     assert len(lines) > 1
     assert " ".join(lines) == value
     assert all("…" not in line for line in lines)
+
+
+def test_png_font_loader_keeps_requested_high_resolution_size() -> None:
+    regular = report_export._load_png_font(30)
+    bold = report_export._load_png_font(30, bold=True)
+
+    assert getattr(regular, "size", None) == 30
+    assert getattr(bold, "size", None) == 30
+
+
+def test_png_canvas_tracks_dynamic_table_width_and_height() -> None:
+    short_document = report_export.ReportDocument(
+        title="ALFATEKS",
+        subtitle="2026-09-04",
+        columns=[
+            report_export.ExportColumn("code", "Code", 12),
+            report_export.ExportColumn("name", "Name", 28),
+        ],
+        rows=[{"code": "P1", "name": "Atlas"}],
+        summary=[("Products", 1)],
+        filename="short",
+    )
+    expanded_document = replace(
+        short_document,
+        rows=[
+            {
+                "code": f"ALF-{index:04d}-" + "X" * 72,
+                "name": "Professional textile product with a fully preserved long name",
+            }
+            for index in range(8)
+        ],
+    )
+
+    short_image = Image.open(BytesIO(report_export._png(short_document)))
+    expanded_image = Image.open(BytesIO(report_export._png(expanded_document)))
+
+    assert expanded_image.width > short_image.width
+    assert expanded_image.height > short_image.height
+    assert expanded_image.width <= report_export.PNG_MAX_WIDTH
 
 
 def test_pdf_widths_balance_short_content_and_expand_for_long_values() -> None:
@@ -273,9 +339,7 @@ def test_pdf_widths_balance_short_content_and_expand_for_long_values() -> None:
         available_width,
     )
 
-    assert sum(short_widths) == pytest.approx(
-        available_width * report_export.TABLE_MIN_WIDTH_RATIO
-    )
+    assert sum(short_widths) == pytest.approx(available_width * report_export.TABLE_MIN_WIDTH_RATIO)
     assert short_widths[1] > short_widths[0]
     assert long_widths[1] > short_widths[1]
     assert sum(long_widths) <= available_width
@@ -288,17 +352,17 @@ async def test_daily_dashboard_report_calculates_in_out_and_adjustments(
     product = await create_product(name="Daily Movement", lot_number="DAILY-1", initial_stock="0")
     stock_in = await client.post(
         f"/api/v1/products/{product['id']}/stock/in",
-        json={"quantity": "10", "note": "daily receive"},
+        json={"quantity": "10", "count": 10, "note": "daily receive"},
         headers=auth_headers,
     )
     stock_out = await client.post(
         f"/api/v1/products/{product['id']}/stock/out",
-        json={"quantity": "3", "note": "daily issue"},
+        json={"quantity": "3", "count": 3, "note": "daily issue"},
         headers=auth_headers,
     )
     adjustment = await client.post(
         f"/api/v1/products/{product['id']}/stock/adjust",
-        json={"quantity": "12", "note": "count"},
+        json={"quantity": "12", "count": 2, "note": "count"},
         headers=auth_headers,
     )
     assert stock_in.status_code == stock_out.status_code == adjustment.status_code == 201
@@ -324,6 +388,76 @@ async def test_daily_dashboard_report_calculates_in_out_and_adjustments(
     )
     assert exported.status_code == 200
     assert exported.content.startswith(b"PK")
+
+
+@pytest.mark.asyncio
+async def test_daily_report_aggregates_an_inclusive_date_range(
+    client: httpx.AsyncClient, auth_headers: dict[str, str], create_product
+) -> None:
+    product = await create_product(
+        product_code="ALF-RANGE-1",
+        name="Range Movement",
+        lot_number="RANGE-1",
+        initial_stock="0",
+    )
+    stock_in = await client.post(
+        f"/api/v1/products/{product['id']}/stock/in",
+        json={"quantity": "10", "count": 10, "note": "range in"},
+        headers=auth_headers,
+    )
+    stock_out = await client.post(
+        f"/api/v1/products/{product['id']}/stock/out",
+        json={"quantity": "3", "count": 3, "note": "range out"},
+        headers=auth_headers,
+    )
+    assert stock_in.status_code == stock_out.status_code == 201
+
+    reporting_now = datetime.now(ZoneInfo("Europe/Istanbul"))
+    date_from = reporting_now.date() - timedelta(days=2)
+    date_to = reporting_now.date()
+    async with AsyncSessionFactory() as session:
+        await session.execute(
+            update(StockTransaction)
+            .where(
+                StockTransaction.product_id == product["id"],
+                StockTransaction.note == "range in",
+            )
+            .values(created_at=reporting_now.replace(hour=12) - timedelta(days=2))
+        )
+        await session.commit()
+
+    response = await client.get(
+        f"/api/v1/dashboard/daily?date_from={date_from}&date_to={date_to}",
+        headers=auth_headers,
+    )
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["report_date_from"] == date_from.isoformat()
+    assert data["report_date_to"] == date_to.isoformat()
+    assert Decimal(data["summary"]["stock_in"]) == Decimal("10")
+    assert Decimal(data["summary"]["stock_out"]) == Decimal("3")
+    assert Decimal(data["products"][0]["opening_stock"]) == Decimal("0")
+    assert Decimal(data["products"][0]["closing_stock"]) == Decimal("7")
+
+    exported = await client.get(
+        (f"/api/v1/dashboard/daily/export?date_from={date_from}&date_to={date_to}&format=xlsx"),
+        headers=auth_headers,
+    )
+    assert exported.status_code == 200
+    workbook = load_workbook(BytesIO(exported.content), read_only=True)
+    assert f"Tarih aralığı: {date_from} – {date_to}" in workbook.active["A2"].value
+
+
+@pytest.mark.asyncio
+async def test_daily_report_rejects_reversed_date_range(
+    client: httpx.AsyncClient, auth_headers: dict[str, str]
+) -> None:
+    response = await client.get(
+        "/api/v1/dashboard/daily?date_from=2026-09-04&date_to=2026-09-01",
+        headers=auth_headers,
+    )
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "INVALID_REPORT_FILTERS"
 
 
 @pytest.mark.asyncio
@@ -353,6 +487,7 @@ async def test_daily_report_direction_filter_is_shared_by_preview_and_export(
         name="Daily Adjustment Out",
         lot_number="DAILY-ADJ-OUT",
         initial_stock="10",
+        count=10,
     )
     async with AsyncSessionFactory() as session:
         await session.execute(
@@ -367,28 +502,28 @@ async def test_daily_report_direction_filter_is_shared_by_preview_and_export(
     assert (
         await client.post(
             f"/api/v1/products/{inbound['id']}/stock/in",
-            json={"quantity": "5", "note": "direction in"},
+            json={"quantity": "5", "count": 5, "note": "direction in"},
             headers=auth_headers,
         )
     ).status_code == 201
     assert (
         await client.post(
             f"/api/v1/products/{adjustment_in['id']}/stock/adjust",
-            json={"quantity": "2", "note": "positive direction"},
+            json={"quantity": "2", "count": 2, "note": "positive direction"},
             headers=auth_headers,
         )
     ).status_code == 201
     assert (
         await client.post(
             f"/api/v1/products/{adjustment_out['id']}/stock/adjust",
-            json={"quantity": "-4", "note": "negative direction"},
+            json={"quantity": "-4", "count": -4, "note": "negative direction"},
             headers=auth_headers,
         )
     ).status_code == 201
     assert (
         await client.post(
             f"/api/v1/products/{outbound['id']}/stock/out",
-            json={"quantity": "4", "note": "direction out"},
+            json={"quantity": "4", "count": 4, "note": "direction out"},
             headers=auth_headers,
         )
     ).status_code == 201
@@ -435,7 +570,7 @@ async def test_daily_report_direction_filter_is_shared_by_preview_and_export(
 
 
 @pytest.mark.asyncio
-async def test_filtered_daily_png_export_uses_single_a4_landscape_canvas(
+async def test_filtered_daily_png_export_uses_dynamic_high_resolution_canvas(
     client: httpx.AsyncClient, auth_headers: dict[str, str], create_product
 ) -> None:
     product = await create_product(
@@ -446,7 +581,7 @@ async def test_filtered_daily_png_export_uses_single_a4_landscape_canvas(
     )
     response = await client.post(
         f"/api/v1/products/{product['id']}/stock/in",
-        json={"quantity": "5", "note": "A4 PNG"},
+        json={"quantity": "5", "count": 5, "note": "A4 PNG"},
         headers=auth_headers,
     )
     assert response.status_code == 201
@@ -458,7 +593,9 @@ async def test_filtered_daily_png_export_uses_single_a4_landscape_canvas(
     assert exported.status_code == 200
     assert exported.headers["x-report-row-count"] == "1"
     image = Image.open(BytesIO(exported.content))
-    assert image.size == (1753, 1240)
+    assert image.width <= report_export.PNG_MAX_WIDTH
+    assert image.height > 0
+    assert image.info["dpi"] == pytest.approx((300, 300), abs=0.1)
 
 
 @pytest.mark.asyncio

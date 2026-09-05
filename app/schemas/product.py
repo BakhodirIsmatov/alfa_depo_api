@@ -17,6 +17,7 @@ class ProductFields(BaseModel):
     description: str | None = Field(default=None, max_length=5000)
     unit: Literal["kg"] = "kg"
     minimum_stock: StockValue = Field(ge=0, max_digits=14, decimal_places=3)
+    count: int | None = Field(default=None, ge=0)
 
     @field_validator("product_code", "name", "lot_number", mode="before")
     @classmethod
@@ -45,6 +46,7 @@ class ProductUpdate(BaseModel):
     color_code: str | None = Field(default=None, max_length=32, exclude=True)
     description: str | None = Field(default=None, max_length=5000)
     minimum_stock: StockValue | None = Field(default=None, ge=0, max_digits=14, decimal_places=3)
+    count: int | None = Field(default=None, ge=0)
 
     @field_validator("product_code", "name", "lot_number", mode="before")
     @classmethod
@@ -77,6 +79,7 @@ class ProductResponse(BaseModel):
     image_url: str | None
     current_stock: StockValue
     minimum_stock: StockValue
+    count: int | None
     created_at: datetime
     updated_at: datetime
     created_by: int
