@@ -19,6 +19,7 @@ from app.core.exceptions import (
     unexpected_error_handler,
     validation_error_handler,
 )
+from app.privacy import router as privacy_router
 from app.schemas.common import MessageData, SuccessResponse
 from app.services.audit import AuditService
 
@@ -50,6 +51,7 @@ if settings.cors_origins:
         expose_headers=["Content-Disposition", "X-Report-Row-Count", "X-Request-ID"],
     )
 
+app.include_router(privacy_router)
 app.include_router(api_router, prefix=settings.api_v1_prefix)
 settings.media_root.mkdir(parents=True, exist_ok=True)
 app.mount("/media", StaticFiles(directory=settings.media_root), name="media")

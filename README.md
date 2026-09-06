@@ -17,6 +17,8 @@ The API runs at `http://localhost:8000`. Migrations run automatically before the
 - Swagger UI: `http://localhost:8000/api/docs`
 - ReDoc: `http://localhost:8000/api/redoc`
 - Health: `http://localhost:8000/health`
+- Turkish Privacy Policy: `http://localhost:8000/api/privacy-policy/tr`
+- English Privacy Policy: `http://localhost:8000/api/privacy-policy/en`
 
 Create or synchronize development seed data from `.env` after PostgreSQL is healthy:
 
@@ -67,6 +69,13 @@ The fixed roles are `admin`, `manager`, `user`, and `reporter`. `admin` always h
 ## API surface
 
 All application endpoints use the `/api/v1` prefix and a consistent `{ "success": true, "data": ... }` envelope.
+
+Public, authentication-free legal pages are served as responsive HTML outside the
+versioned JSON API:
+
+- `GET /api/privacy-policy/tr` — Turkish Privacy Policy
+- `GET /api/privacy-policy/en` — English Privacy Policy
+- `GET /api/privacy-policy` — redirects to the Turkish policy
 
 - `POST /auth/login`, `GET /auth/me`, `POST /auth/logout`
 - Permission-protected user management at `/users`, including password reset, sessions, and auth events
